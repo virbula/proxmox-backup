@@ -7,6 +7,7 @@ pub mod catalog_shell;
 pub mod pxar;
 pub mod tools;
 
+mod inject_reused_chunks;
 mod merge_known_chunks;
 pub mod pipe_to_stream;
 
