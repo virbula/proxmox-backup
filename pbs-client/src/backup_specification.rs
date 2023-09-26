@@ -1,4 +1,5 @@
 use anyhow::{bail, Error};
+use serde::{Deserialize, Serialize};
 
 use proxmox_schema::*;
 
@@ -44,4 +45,29 @@ pub fn parse_backup_specification(value: &str) -> Result<BackupSpecification, Er
     }
 
     bail!("unable to parse backup source specification '{}'", value);
+}
+
+#[api]
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+/// Mode to detect file changes since last backup run
+pub enum BackupDetectionMode {
+    /// Encode backup as self contained pxar archive
+    #[default]
+    Default,
+    /// Split backup mode, re-encode payload data
+    Data,
+    /// Compare metadata, reuse payload chunks if metadata unchanged
+    Metadata,
+}
+
+impl BackupDetectionMode {
+    /// Selected mode is data based file change detection with split meta/payload streams
+    pub fn is_data(&self) -> bool {
+        matches!(self, Self::Data)
+    }
+    /// Selected mode is metadata based file change detection
+    pub fn is_metadata(&self) -> bool {
+        matches!(self, Self::Metadata)
+    }
 }
