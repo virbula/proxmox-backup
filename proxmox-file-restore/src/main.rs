@@ -24,6 +24,7 @@ use pbs_api_types::{file_restore::FileRestoreFormat, BackupDir, BackupNamespace,
 use pbs_client::pxar::{create_tar, create_zip, extract_sub_dir, extract_sub_dir_seq};
 use pbs_client::tools::{
     complete_group_or_snapshot, complete_repository, connect, extract_repository_from_value,
+    has_pxar_filename_extension,
     key_source::{
         crypto_parameters_keep_fd, format_key_source, get_encryption_key_password, KEYFD_SCHEMA,
         KEYFILE_SCHEMA,

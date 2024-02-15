@@ -18,20 +18,20 @@ use proxmox_schema::*;
 use proxmox_sortable_macro::sortable;
 
 use pbs_api_types::BackupNamespace;
+use pbs_client::tools::has_pxar_filename_extension;
 use pbs_client::tools::key_source::get_encryption_key_password;
 use pbs_client::{BackupReader, RemoteChunkReader};
 use pbs_datastore::cached_chunk_reader::CachedChunkReader;
-use pbs_datastore::dynamic_index::BufferedDynamicReader;
 use pbs_datastore::index::IndexFile;
 use pbs_key_config::load_and_decrypt_key;
 use pbs_tools::crypt_config::CryptConfig;
 use pbs_tools::json::required_string_param;
 
+use crate::helper;
 use crate::{
     complete_group_or_snapshot, complete_img_archive_name, complete_namespace,
     complete_pxar_archive_name, complete_repository, connect, dir_or_last_from_group,
-    extract_repository_from_value, optional_ns_param, record_repository, BufferedDynamicReadAt,
-    REPO_URL_SCHEMA,
+    extract_repository_from_value, optional_ns_param, record_repository, REPO_URL_SCHEMA,
 };
 
 #[sortable]
@@ -219,7 +219,7 @@ async fn mount_do(param: Value, pipe: Option<OwnedFd>) -> Result<Value, Error> {
         }
     };
 
-    let server_archive_name = if archive_name.ends_with(".pxar") {
+    let server_archive_name = if has_pxar_filename_extension(archive_name, false) {
         if target.is_none() {
             bail!("use the 'mount' command to mount pxar archives");
         }
@@ -245,8 +245,6 @@ async fn mount_do(param: Value, pipe: Option<OwnedFd>) -> Result<Value, Error> {
 
     let (manifest, _) = client.download_manifest().await?;
     manifest.check_fingerprint(crypt_config.as_ref().map(Arc::as_ref))?;
-
-    let file_info = manifest.lookup_file_info(&server_archive_name)?;
 
     let daemonize = || -> Result<(), Error> {
         if let Some(pipe) = pipe {
@@ -283,21 +281,13 @@ async fn mount_do(param: Value, pipe: Option<OwnedFd>) -> Result<Value, Error> {
         futures::future::select(interrupt_int.recv().boxed(), interrupt_term.recv().boxed());
 
     if server_archive_name.ends_with(".didx") {
-        let index = client
-            .download_dynamic_index(&manifest, &server_archive_name)
-            .await?;
-        let most_used = index.find_most_used_chunks(8);
-        let chunk_reader = RemoteChunkReader::new(
+        let decoder = helper::get_pxar_fuse_accessor(
+            &server_archive_name,
             client.clone(),
-            crypt_config,
-            file_info.chunk_crypt_mode(),
-            most_used,
-        );
-        let reader = BufferedDynamicReader::new(index, chunk_reader);
-        let archive_size = reader.archive_size();
-        let reader: pbs_pxar_fuse::Reader = Arc::new(BufferedDynamicReadAt::new(reader));
-        let decoder =
-            pbs_pxar_fuse::Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
+            &manifest,
+            crypt_config.clone(),
+        )
+        .await?;
 
         let session =
             pbs_pxar_fuse::Session::mount(decoder, options, false, Path::new(target.unwrap()))
@@ -312,6 +302,7 @@ async fn mount_do(param: Value, pipe: Option<OwnedFd>) -> Result<Value, Error> {
             }
         }
     } else if server_archive_name.ends_with(".fidx") {
+        let file_info = manifest.lookup_file_info(&archive_name)?;
         let index = client
             .download_fixed_index(&manifest, &server_archive_name)
             .await?;
