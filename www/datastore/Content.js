@@ -1050,7 +1050,7 @@ Ext.define('PBS.DataStoreContent', {
 		    tooltip: gettext('Browse'),
 		    getClass: (v, m, { data }) => {
 			if (
-			    (data.ty === 'file' && data.filename.endsWith('pxar.didx')) ||
+			    (data.ty === 'file' && (data.filename.endsWith('.pxar.didx') || data.filename.endsWith('.mpxar.didx'))) ||
 			    (data.ty === 'ns' && !data.root)
 			) {
 			    return 'fa fa-folder-open-o';
@@ -1058,7 +1058,9 @@ Ext.define('PBS.DataStoreContent', {
 			return 'pmx-hidden';
 		    },
 		    isActionDisabled: (v, r, c, i, { data }) =>
-			!(data.ty === 'file' && data.filename.endsWith('pxar.didx') && data['crypt-mode'] < 3) && data.ty !== 'ns',
+			!(data.ty === 'file' &&
+			(data.filename.endsWith('.pxar.didx') || data.filename.endsWith('.mpxar.didx')) &&
+			data['crypt-mode'] < 3) && data.ty !== 'ns',
 		},
 	    ],
 	},
