@@ -338,7 +338,7 @@ pub fn complete_pxar_archive_name(arg: &str, param: &HashMap<String, String>) ->
     complete_server_file_name(arg, param)
         .iter()
         .filter_map(|name| {
-            if name.ends_with(".pxar.didx") {
+            if has_pxar_filename_extension(name, true) {
                 Some(pbs_tools::format::strip_server_file_extension(name).to_owned())
             } else {
                 None
