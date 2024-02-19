@@ -76,7 +76,7 @@ fn parse_path(path: String, base64: bool) -> Result<ExtractPath, Error> {
         (file, path)
     };
 
-    if file.ends_with(".pxar.didx") {
+    if has_pxar_filename_extension(&file, true) {
         Ok(ExtractPath::Pxar(file, path))
     } else if file.ends_with(".img.fidx") {
         Ok(ExtractPath::VM(file, path))
@@ -124,11 +124,13 @@ async fn list_files(
         ExtractPath::ListArchives => {
             let mut entries = vec![];
             for file in manifest.files() {
-                if !file.filename.ends_with(".pxar.didx") && !file.filename.ends_with(".img.fidx") {
+                if !has_pxar_filename_extension(&file.filename, true)
+                    && !file.filename.ends_with(".img.fidx")
+                {
                     continue;
                 }
                 let path = format!("/{}", file.filename);
-                let attr = if file.filename.ends_with(".pxar.didx") {
+                let attr = if has_pxar_filename_extension(&file.filename, true) {
                     // a pxar file is a file archive, so it's root is also a directory root
                     Some(&DirEntryAttribute::Directory { start: 0 })
                 } else {
