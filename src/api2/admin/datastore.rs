@@ -1810,10 +1810,20 @@ pub fn pxar_file_download(
             }
         }
 
+        let (pxar_name, payload_archive_name) =
+            pbs_client::tools::get_pxar_archive_names(pxar_name, &manifest)?;
         let (reader, archive_size) =
-            get_local_pxar_reader(datastore.clone(), &manifest, &backup_dir, pxar_name)?;
+            get_local_pxar_reader(datastore.clone(), &manifest, &backup_dir, &pxar_name)?;
 
-        let decoder = Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
+        let reader = if let Some(payload_archive_name) = payload_archive_name {
+            let payload_input =
+                get_local_pxar_reader(datastore, &manifest, &backup_dir, &payload_archive_name)?;
+            pxar::PxarVariant::Split(reader, payload_input)
+        } else {
+            pxar::PxarVariant::Unified(reader)
+        };
+        let decoder = Accessor::new(reader, archive_size).await?;
+
         let root = decoder.open_root().await?;
         let path = OsStr::from_bytes(file_path).to_os_string();
         let file = root
