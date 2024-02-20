@@ -1813,7 +1813,7 @@ pub fn pxar_file_download(
         let (reader, archive_size) =
             get_local_pxar_reader(datastore.clone(), &manifest, &backup_dir, pxar_name)?;
 
-        let decoder = Accessor::new(reader, archive_size).await?;
+        let decoder = Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
         let root = decoder.open_root().await?;
         let path = OsStr::from_bytes(file_path).to_os_string();
         let file = root

@@ -26,7 +26,7 @@ fn extract_archive_from_reader<R: std::io::Read>(
     options: PxarExtractOptions,
 ) -> Result<(), Error> {
     pbs_client::pxar::extract_archive(
-        pxar::decoder::Decoder::from_std(reader)?,
+        pxar::decoder::Decoder::from_std(pxar::PxarVariant::Unified(reader))?,
         Path::new(target),
         feature_flags,
         |path| {
@@ -436,7 +436,7 @@ async fn mount_archive(archive: String, mountpoint: String, verbose: bool) -> Re
 )]
 /// List the contents of an archive.
 fn dump_archive(archive: String) -> Result<(), Error> {
-    for entry in pxar::decoder::Decoder::open(archive)? {
+    for entry in pxar::decoder::Decoder::open(pxar::PxarVariant::Unified(archive))? {
         let entry = entry?;
 
         if log::log_enabled!(log::Level::Debug) {

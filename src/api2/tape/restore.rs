@@ -1069,7 +1069,8 @@ fn restore_snapshots_to_tmpdir(
                     "File {file_num}: snapshot archive {source_datastore}:{snapshot}",
                 );
 
-                let mut decoder = pxar::decoder::sync::Decoder::from_std(reader)?;
+                let mut decoder =
+                    pxar::decoder::sync::Decoder::from_std(pxar::PxarVariant::Unified(reader))?;
 
                 let target_datastore = match store_map.target_store(&source_datastore) {
                     Some(datastore) => datastore,
@@ -1685,7 +1686,7 @@ fn restore_snapshot_archive<'a>(
     reader: Box<dyn 'a + TapeRead>,
     snapshot_path: &Path,
 ) -> Result<bool, Error> {
-    let mut decoder = pxar::decoder::sync::Decoder::from_std(reader)?;
+    let mut decoder = pxar::decoder::sync::Decoder::from_std(pxar::PxarVariant::Unified(reader))?;
     match try_restore_snapshot_archive(worker, &mut decoder, snapshot_path) {
         Ok(_) => Ok(true),
         Err(err) => {

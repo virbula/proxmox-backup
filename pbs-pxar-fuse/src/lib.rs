@@ -66,7 +66,7 @@ impl Session {
         let file = std::fs::File::open(archive_path)?;
         let file_size = file.metadata()?.len();
         let reader: Reader = Arc::new(accessor::sync::FileReader::new(file));
-        let accessor = Accessor::new(reader, file_size).await?;
+        let accessor = Accessor::new(pxar::PxarVariant::Unified(reader), file_size).await?;
         Self::mount(accessor, options, verbose, mountpoint)
     }
 

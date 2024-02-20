@@ -58,8 +58,10 @@ pub fn tape_write_snapshot_archive<'a>(
             ));
         }
 
-        let mut encoder =
-            pxar::encoder::sync::Encoder::new(PxarTapeWriter::new(writer), &root_metadata)?;
+        let mut encoder = pxar::encoder::sync::Encoder::new(
+            pxar::PxarVariant::Unified(PxarTapeWriter::new(writer)),
+            &root_metadata,
+        )?;
 
         for filename in file_list.iter() {
             let mut file = snapshot_reader.open_file(filename).map_err(|err| {
@@ -89,6 +91,7 @@ pub fn tape_write_snapshot_archive<'a>(
             }
         }
         encoder.finish()?;
+        encoder.close()?;
         Ok(())
     });
 

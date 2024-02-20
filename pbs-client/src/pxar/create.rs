@@ -170,7 +170,7 @@ where
         set.insert(stat.st_dev);
     }
 
-    let mut encoder = Encoder::new(&mut writer, &metadata).await?;
+    let mut encoder = Encoder::new(pxar::PxarVariant::Unified(&mut writer), &metadata).await?;
 
     let mut patterns = options.patterns;
 
@@ -203,6 +203,8 @@ where
         .archive_dir_contents(&mut encoder, source_dir, true)
         .await?;
     encoder.finish().await?;
+    encoder.close().await?;
+
     Ok(())
 }
 
@@ -663,7 +665,7 @@ impl Archiver {
     ) -> Result<(), Error> {
         let dir_name = OsStr::from_bytes(dir_name.to_bytes());
 
-        let mut encoder = encoder.create_directory(dir_name, metadata).await?;
+        encoder.create_directory(dir_name, metadata).await?;
 
         let old_fs_magic = self.fs_magic;
         let old_fs_feature_flags = self.fs_feature_flags;
@@ -686,7 +688,7 @@ impl Archiver {
             log::info!("skipping mount point: {:?}", self.path);
             Ok(())
         } else {
-            self.archive_dir_contents(&mut encoder, dir, false).await
+            self.archive_dir_contents(encoder, dir, false).await
         };
 
         self.fs_magic = old_fs_magic;

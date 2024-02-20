@@ -1458,7 +1458,7 @@ async fn restore(
 
         if let Some(target) = target {
             pbs_client::pxar::extract_archive(
-                pxar::decoder::Decoder::from_std(reader)?,
+                pxar::decoder::Decoder::from_std(pxar::PxarVariant::Unified(reader))?,
                 Path::new(target),
                 feature_flags,
                 |path| {

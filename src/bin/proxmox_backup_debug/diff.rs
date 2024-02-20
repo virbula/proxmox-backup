@@ -277,7 +277,7 @@ async fn open_dynamic_index(
     let reader = BufferedDynamicReader::new(index, chunk_reader);
     let archive_size = reader.archive_size();
     let reader: Arc<dyn ReadAt + Send + Sync> = Arc::new(LocalDynamicReadAt::new(reader));
-    let accessor = Accessor::new(reader, archive_size).await?;
+    let accessor = Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
 
     Ok((lookup_index, accessor))
 }

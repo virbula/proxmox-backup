@@ -296,7 +296,8 @@ async fn mount_do(param: Value, pipe: Option<OwnedFd>) -> Result<Value, Error> {
         let reader = BufferedDynamicReader::new(index, chunk_reader);
         let archive_size = reader.archive_size();
         let reader: pbs_pxar_fuse::Reader = Arc::new(BufferedDynamicReadAt::new(reader));
-        let decoder = pbs_pxar_fuse::Accessor::new(reader, archive_size).await?;
+        let decoder =
+            pbs_pxar_fuse::Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
 
         let session =
             pbs_pxar_fuse::Session::mount(decoder, options, false, Path::new(target.unwrap()))
