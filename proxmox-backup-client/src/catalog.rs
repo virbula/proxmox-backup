@@ -9,17 +9,19 @@ use proxmox_router::cli::*;
 use proxmox_schema::api;
 
 use pbs_api_types::BackupNamespace;
+use pbs_client::tools::has_pxar_filename_extension;
 use pbs_client::tools::key_source::get_encryption_key_password;
 use pbs_client::{BackupReader, RemoteChunkReader};
 use pbs_tools::crypt_config::CryptConfig;
 use pbs_tools::json::required_string_param;
 
+use crate::helper;
 use crate::{
     complete_backup_snapshot, complete_group_or_snapshot, complete_namespace,
     complete_pxar_archive_name, complete_repository, connect, crypto_parameters, decrypt_key,
     dir_or_last_from_group, extract_repository_from_value, format_key_source, optional_ns_param,
-    record_repository, BackupDir, BufferedDynamicReadAt, BufferedDynamicReader, CatalogReader,
-    DynamicIndexReader, IndexFile, Shell, CATALOG_NAME, KEYFD_SCHEMA, REPO_URL_SCHEMA,
+    record_repository, BackupDir, BufferedDynamicReader, CatalogReader, DynamicIndexReader,
+    IndexFile, Shell, CATALOG_NAME, KEYFD_SCHEMA, REPO_URL_SCHEMA,
 };
 
 #[api(
@@ -180,7 +182,7 @@ async fn catalog_shell(param: Value) -> Result<(), Error> {
         }
     };
 
-    let server_archive_name = if archive_name.ends_with(".pxar") {
+    let server_archive_name = if has_pxar_filename_extension(archive_name, false) {
         format!("{}.didx", archive_name)
     } else {
         bail!("Can only mount pxar archives.");
@@ -205,23 +207,13 @@ async fn catalog_shell(param: Value) -> Result<(), Error> {
     let (manifest, _) = client.download_manifest().await?;
     manifest.check_fingerprint(crypt_config.as_ref().map(Arc::as_ref))?;
 
-    let index = client
-        .download_dynamic_index(&manifest, &server_archive_name)
-        .await?;
-    let most_used = index.find_most_used_chunks(8);
-
-    let file_info = manifest.lookup_file_info(&server_archive_name)?;
-    let chunk_reader = RemoteChunkReader::new(
+    let decoder = helper::get_pxar_fuse_accessor(
+        &server_archive_name,
         client.clone(),
+        &manifest,
         crypt_config.clone(),
-        file_info.chunk_crypt_mode(),
-        most_used,
-    );
-    let reader = BufferedDynamicReader::new(index, chunk_reader);
-    let archive_size = reader.archive_size();
-    let reader: pbs_pxar_fuse::Reader = Arc::new(BufferedDynamicReadAt::new(reader));
-    let decoder =
-        pbs_pxar_fuse::Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
+    )
+    .await?;
 
     client.download(CATALOG_NAME, &mut tmpfile).await?;
     let index = DynamicIndexReader::new(tmpfile)
