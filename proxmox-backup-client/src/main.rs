@@ -35,7 +35,7 @@ use pbs_client::tools::{
     complete_archive_name, complete_auth_id, complete_backup_group, complete_backup_snapshot,
     complete_backup_source, complete_chunk_size, complete_group_or_snapshot,
     complete_img_archive_name, complete_namespace, complete_pxar_archive_name, complete_repository,
-    connect, connect_rate_limited, extract_repository_from_value,
+    connect, connect_rate_limited, extract_repository_from_value, has_pxar_filename_extension,
     key_source::{
         crypto_parameters, format_key_source, get_encryption_key_password, KEYFD_SCHEMA,
         KEYFILE_SCHEMA, MASTER_PUBKEY_FD_SCHEMA, MASTER_PUBKEY_FILE_SCHEMA,
@@ -1216,7 +1216,7 @@ async fn dump_image<W: Write>(
 fn parse_archive_type(name: &str) -> (String, ArchiveType) {
     if name.ends_with(".didx") || name.ends_with(".fidx") || name.ends_with(".blob") {
         (name.into(), archive_type(name).unwrap())
-    } else if name.ends_with(".pxar") {
+    } else if has_pxar_filename_extension(name, false) {
         (format!("{}.didx", name), ArchiveType::DynamicIndex)
     } else if name.ends_with(".img") {
         (format!("{}.fidx", name), ArchiveType::FixedIndex)
@@ -1428,8 +1428,6 @@ async fn restore(
         return Ok(Value::Null);
     }
 
-    let file_info = manifest.lookup_file_info(&archive_name)?;
-
     if archive_type == ArchiveType::Blob {
         let mut reader = client.download_blob(&manifest, &archive_name).await?;
 
@@ -1450,20 +1448,16 @@ async fn restore(
                 .map_err(|err| format_err!("unable to pipe data - {}", err))?;
         }
     } else if archive_type == ArchiveType::DynamicIndex {
-        let index = client
-            .download_dynamic_index(&manifest, &archive_name)
-            .await?;
+        let (archive_name, payload_archive_name) =
+            pbs_client::tools::get_pxar_archive_names(&archive_name, &manifest)?;
 
-        let most_used = index.find_most_used_chunks(8);
-
-        let chunk_reader = RemoteChunkReader::new(
+        let mut reader = get_buffered_pxar_reader(
+            &archive_name,
             client.clone(),
-            crypt_config,
-            file_info.chunk_crypt_mode(),
-            most_used,
-        );
-
-        let mut reader = BufferedDynamicReader::new(index, chunk_reader);
+            &manifest,
+            crypt_config.clone(),
+        )
+        .await?;
 
         let on_error = if ignore_extract_device_errors {
             let handler: PxarErrorHandler = Box::new(move |err: Error| {
@@ -1518,8 +1512,22 @@ async fn restore(
         }
 
         if let Some(target) = target {
+            let reader = if let Some(payload_archive_name) = payload_archive_name {
+                let payload_reader = get_buffered_pxar_reader(
+                    &payload_archive_name,
+                    client.clone(),
+                    &manifest,
+                    crypt_config.clone(),
+                )
+                .await?;
+                pxar::PxarVariant::Split(reader, payload_reader)
+            } else {
+                pxar::PxarVariant::Unified(reader)
+            };
+            let decoder = pxar::decoder::Decoder::from_std(reader)?;
+
             pbs_client::pxar::extract_archive(
-                pxar::decoder::Decoder::from_std(pxar::PxarVariant::Unified(reader))?,
+                decoder,
                 Path::new(target),
                 feature_flags,
                 |path| {
@@ -1529,6 +1537,9 @@ async fn restore(
             )
             .map_err(|err| format_err!("error extracting archive - {:#}", err))?;
         } else {
+            if archive_name.ends_with(".mpxar.didx") || archive_name.ends_with(".ppxar.didx") {
+                bail!("unable to pipe split archive");
+            }
             let mut writer = std::fs::OpenOptions::new()
                 .write(true)
                 .open("/dev/stdout")
@@ -1538,6 +1549,7 @@ async fn restore(
                 .map_err(|err| format_err!("unable to pipe data - {}", err))?;
         }
     } else if archive_type == ArchiveType::FixedIndex {
+        let file_info = manifest.lookup_file_info(&archive_name)?;
         let index = client
             .download_fixed_index(&manifest, &archive_name)
             .await?;
