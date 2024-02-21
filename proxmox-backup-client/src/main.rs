@@ -45,8 +45,8 @@ use pbs_client::tools::{
 use pbs_client::{
     delete_ticket_info, parse_backup_specification, view_task_result, BackupReader,
     BackupRepository, BackupSpecificationType, BackupStats, BackupWriter, ChunkStream,
-    FixedChunkStream, HttpClient, PxarBackupStream, RemoteChunkReader, UploadOptions,
-    BACKUP_SOURCE_SCHEMA,
+    FixedChunkStream, HttpClient, InjectionData, PxarBackupStream, RemoteChunkReader,
+    UploadOptions, BACKUP_SOURCE_SCHEMA,
 };
 use pbs_datastore::catalog::{BackupCatalogWriter, CatalogReader, CatalogWriter};
 use pbs_datastore::chunk_store::verify_chunk_size;
@@ -199,14 +199,16 @@ async fn backup_directory<P: AsRef<Path>>(
         bail!("cannot backup directory with fixed chunk size!");
     }
 
+    let (payload_boundaries_tx, payload_boundaries_rx) = std::sync::mpsc::channel();
     let (pxar_stream, payload_stream) = PxarBackupStream::open(
         dir_path.as_ref(),
         catalog,
         pxar_create_options,
+        Some(payload_boundaries_tx),
         payload_target.is_some(),
     )?;
 
-    let mut chunk_stream = ChunkStream::new(pxar_stream, chunk_size);
+    let mut chunk_stream = ChunkStream::new(pxar_stream, chunk_size, None);
     let (tx, rx) = mpsc::channel(10); // allow to buffer 10 chunks
 
     let stream = ReceiverStream::new(rx).map_err(Error::from);
@@ -218,13 +220,16 @@ async fn backup_directory<P: AsRef<Path>>(
         }
     });
 
-    let stats = client.upload_stream(archive_name, stream, upload_options.clone());
+    let stats = client.upload_stream(archive_name, stream, upload_options.clone(), None);
 
     if let Some(payload_stream) = payload_stream {
         let payload_target = payload_target
             .ok_or_else(|| format_err!("got payload stream, but no target archive name"))?;
 
-        let mut payload_chunk_stream = ChunkStream::new(payload_stream, chunk_size);
+        let (payload_injections_tx, payload_injections_rx) = std::sync::mpsc::channel();
+        let injection_data = InjectionData::new(payload_boundaries_rx, payload_injections_tx);
+        let mut payload_chunk_stream =
+            ChunkStream::new(payload_stream, chunk_size, Some(injection_data));
         let (payload_tx, payload_rx) = mpsc::channel(10); // allow to buffer 10 chunks
         let stream = ReceiverStream::new(payload_rx).map_err(Error::from);
 
@@ -235,7 +240,12 @@ async fn backup_directory<P: AsRef<Path>>(
             }
         });
 
-        let payload_stats = client.upload_stream(&payload_target, stream, upload_options);
+        let payload_stats = client.upload_stream(
+            &payload_target,
+            stream,
+            upload_options,
+            Some(payload_injections_rx),
+        );
 
         match futures::join!(stats, payload_stats) {
             (Ok(stats), Ok(payload_stats)) => Ok((stats, Some(payload_stats))),
@@ -271,7 +281,7 @@ async fn backup_image<P: AsRef<Path>>(
     }
 
     let stats = client
-        .upload_stream(archive_name, stream, upload_options)
+        .upload_stream(archive_name, stream, upload_options, None)
         .await?;
 
     Ok(stats)
@@ -562,7 +572,7 @@ fn spawn_catalog_upload(
     let (catalog_tx, catalog_rx) = std::sync::mpsc::sync_channel(10); // allow to buffer 10 writes
     let catalog_stream = proxmox_async::blocking::StdChannelStream(catalog_rx);
     let catalog_chunk_size = 512 * 1024;
-    let catalog_chunk_stream = ChunkStream::new(catalog_stream, Some(catalog_chunk_size));
+    let catalog_chunk_stream = ChunkStream::new(catalog_stream, Some(catalog_chunk_size), None);
 
     let catalog_writer = Arc::new(Mutex::new(CatalogWriter::new(TokioWriterAdapter::new(
         StdChannelWriter::new(catalog_tx),
@@ -578,7 +588,7 @@ fn spawn_catalog_upload(
 
     tokio::spawn(async move {
         let catalog_upload_result = client
-            .upload_stream(CATALOG_NAME, catalog_chunk_stream, upload_options)
+            .upload_stream(CATALOG_NAME, catalog_chunk_stream, upload_options, None)
             .await;
 
         if let Err(ref err) = catalog_upload_result {

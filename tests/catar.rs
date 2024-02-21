@@ -39,6 +39,7 @@ fn run_test(dir_name: &str) -> Result<(), Error> {
         Flags::DEFAULT,
         |_| Ok(()),
         options,
+        None,
     ))?;
 
     Command::new("cmp")

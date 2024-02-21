@@ -363,7 +363,7 @@ fn extract(
                     };
 
                     let pxar_writer = pxar::PxarVariant::Unified(TokioWriter::new(writer));
-                    create_archive(dir, PxarWriters::new(pxar_writer, None), Flags::DEFAULT, |_| Ok(()), options)
+                    create_archive(dir, PxarWriters::new(pxar_writer, None), Flags::DEFAULT, |_| Ok(()), options, None)
                         .await
                 }
                 .await;

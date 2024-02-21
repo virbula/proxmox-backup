@@ -23,6 +23,7 @@ use pbs_tools::crypt_config::CryptConfig;
 
 use proxmox_human_byte::HumanByte;
 
+use super::inject_reused_chunks::{InjectChunks, InjectReusedChunks, InjectedChunksInfo};
 use super::merge_known_chunks::{MergeKnownChunks, MergedChunkInfo};
 
 use super::{H2Client, HttpClient};
@@ -265,6 +266,7 @@ impl BackupWriter {
         archive_name: &str,
         stream: impl Stream<Item = Result<bytes::BytesMut, Error>>,
         options: UploadOptions,
+        injections: Option<std::sync::mpsc::Receiver<InjectChunks>>,
     ) -> Result<BackupStats, Error> {
         let known_chunks = Arc::new(Mutex::new(HashSet::new()));
 
@@ -341,6 +343,7 @@ impl BackupWriter {
                 None
             },
             options.compress,
+            injections,
         )
         .await?;
 
@@ -636,6 +639,7 @@ impl BackupWriter {
         known_chunks: Arc<Mutex<HashSet<[u8; 32]>>>,
         crypt_config: Option<Arc<CryptConfig>>,
         compress: bool,
+        injections: Option<std::sync::mpsc::Receiver<InjectChunks>>,
     ) -> impl Future<Output = Result<UploadStats, Error>> {
         let total_chunks = Arc::new(AtomicUsize::new(0));
         let total_chunks2 = total_chunks.clone();
@@ -662,48 +666,72 @@ impl BackupWriter {
         let index_csum_2 = index_csum.clone();
 
         stream
-            .and_then(move |data| {
-                let chunk_len = data.len();
+            .inject_reused_chunks(injections, stream_len.clone())
+            .and_then(move |chunk_info| match chunk_info {
+                InjectedChunksInfo::Known(chunks) => {
+                    // account for injected chunks
+                    let count = chunks.len();
+                    total_chunks.fetch_add(count, Ordering::SeqCst);
 
-                total_chunks.fetch_add(1, Ordering::SeqCst);
-                let offset = stream_len.fetch_add(chunk_len, Ordering::SeqCst) as u64;
-
-                let mut chunk_builder = DataChunkBuilder::new(data.as_ref()).compress(compress);
-
-                if let Some(ref crypt_config) = crypt_config {
-                    chunk_builder = chunk_builder.crypt_config(crypt_config);
+                    let mut known = Vec::new();
+                    let mut guard = index_csum.lock().unwrap();
+                    let csum = guard.as_mut().unwrap();
+                    for chunk in chunks {
+                        let offset =
+                            stream_len.fetch_add(chunk.size() as usize, Ordering::SeqCst) as u64;
+                        reused_len.fetch_add(chunk.size() as usize, Ordering::SeqCst);
+                        let digest = chunk.digest();
+                        known.push((offset, digest));
+                        let end_offset = offset + chunk.size();
+                        csum.update(&end_offset.to_le_bytes());
+                        csum.update(&digest);
+                    }
+                    future::ok(MergedChunkInfo::Known(known))
                 }
+                InjectedChunksInfo::Raw(data) => {
+                    // account for not injected chunks (new and known)
+                    let chunk_len = data.len();
 
-                let mut known_chunks = known_chunks.lock().unwrap();
-                let digest = chunk_builder.digest();
+                    total_chunks.fetch_add(1, Ordering::SeqCst);
+                    let offset = stream_len.fetch_add(chunk_len, Ordering::SeqCst) as u64;
 
-                let mut guard = index_csum.lock().unwrap();
-                let csum = guard.as_mut().unwrap();
+                    let mut chunk_builder = DataChunkBuilder::new(data.as_ref()).compress(compress);
 
-                let chunk_end = offset + chunk_len as u64;
+                    if let Some(ref crypt_config) = crypt_config {
+                        chunk_builder = chunk_builder.crypt_config(crypt_config);
+                    }
 
-                if !is_fixed_chunk_size {
-                    csum.update(&chunk_end.to_le_bytes());
-                }
-                csum.update(digest);
+                    let mut known_chunks = known_chunks.lock().unwrap();
+                    let digest = chunk_builder.digest();
 
-                let chunk_is_known = known_chunks.contains(digest);
-                if chunk_is_known {
-                    known_chunk_count.fetch_add(1, Ordering::SeqCst);
-                    reused_len.fetch_add(chunk_len, Ordering::SeqCst);
-                    future::ok(MergedChunkInfo::Known(vec![(offset, *digest)]))
-                } else {
-                    let compressed_stream_len2 = compressed_stream_len.clone();
-                    known_chunks.insert(*digest);
-                    future::ready(chunk_builder.build().map(move |(chunk, digest)| {
-                        compressed_stream_len2.fetch_add(chunk.raw_size(), Ordering::SeqCst);
-                        MergedChunkInfo::New(ChunkInfo {
-                            chunk,
-                            digest,
-                            chunk_len: chunk_len as u64,
-                            offset,
-                        })
-                    }))
+                    let mut guard = index_csum.lock().unwrap();
+                    let csum = guard.as_mut().unwrap();
+
+                    let chunk_end = offset + chunk_len as u64;
+
+                    if !is_fixed_chunk_size {
+                        csum.update(&chunk_end.to_le_bytes());
+                    }
+                    csum.update(digest);
+
+                    let chunk_is_known = known_chunks.contains(digest);
+                    if chunk_is_known {
+                        known_chunk_count.fetch_add(1, Ordering::SeqCst);
+                        reused_len.fetch_add(chunk_len, Ordering::SeqCst);
+                        future::ok(MergedChunkInfo::Known(vec![(offset, *digest)]))
+                    } else {
+                        let compressed_stream_len2 = compressed_stream_len.clone();
+                        known_chunks.insert(*digest);
+                        future::ready(chunk_builder.build().map(move |(chunk, digest)| {
+                            compressed_stream_len2.fetch_add(chunk.raw_size(), Ordering::SeqCst);
+                            MergedChunkInfo::New(ChunkInfo {
+                                chunk,
+                                digest,
+                                chunk_len: chunk_len as u64,
+                                offset,
+                            })
+                        }))
+                    }
                 }
             })
             .merge_known_chunks()

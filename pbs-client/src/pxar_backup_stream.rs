@@ -2,7 +2,7 @@ use std::io::Write;
 //use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::task::{Context, Poll};
 
 use anyhow::{format_err, Error};
@@ -17,6 +17,7 @@ use proxmox_io::StdChannelWriter;
 
 use pbs_datastore::catalog::CatalogWriter;
 
+use crate::inject_reused_chunks::InjectChunks;
 use crate::pxar::create::PxarWriters;
 
 /// Stream implementation to encode and upload .pxar archives.
@@ -42,6 +43,7 @@ impl PxarBackupStream {
         dir: Dir,
         catalog: Arc<Mutex<CatalogWriter<W>>>,
         options: crate::pxar::PxarCreateOptions,
+        boundaries: Option<mpsc::Sender<InjectChunks>>,
         separate_payload_stream: bool,
     ) -> Result<(Self, Option<Self>), Error> {
         let buffer_size = 256 * 1024;
@@ -82,6 +84,7 @@ impl PxarBackupStream {
                     Ok(())
                 },
                 options,
+                boundaries,
             )
             .await
             {
@@ -113,11 +116,12 @@ impl PxarBackupStream {
         dirname: &Path,
         catalog: Arc<Mutex<CatalogWriter<W>>>,
         options: crate::pxar::PxarCreateOptions,
+        boundaries: Option<mpsc::Sender<InjectChunks>>,
         separate_payload_stream: bool,
     ) -> Result<(Self, Option<Self>), Error> {
         let dir = nix::dir::Dir::open(dirname, OFlag::O_DIRECTORY, Mode::empty())?;
 
-        Self::new(dir, catalog, options, separate_payload_stream)
+        Self::new(dir, catalog, options, boundaries, separate_payload_stream)
     }
 }
 

@@ -409,6 +409,7 @@ async fn create_archive(
             Ok(())
         },
         options,
+        None,
     )
     .await?;
 

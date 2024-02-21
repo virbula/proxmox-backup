@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 use anyhow::{bail, Context, Error};
 use futures::future::BoxFuture;
@@ -29,6 +29,7 @@ use pbs_datastore::catalog::BackupCatalogWriter;
 use pbs_datastore::dynamic_index::DynamicIndexReader;
 use pbs_datastore::index::IndexFile;
 
+use crate::inject_reused_chunks::InjectChunks;
 use crate::pxar::metadata::errno_is_unsupported;
 use crate::pxar::tools::assert_single_path_component;
 use crate::pxar::Flags;
@@ -134,6 +135,7 @@ struct Archiver {
     hardlinks: HashMap<HardLinkInfo, (PathBuf, LinkOffset)>,
     file_copy_buffer: Vec<u8>,
     skip_e2big_xattr: bool,
+    forced_boundaries: Option<mpsc::Sender<InjectChunks>>,
 }
 
 type Encoder<'a, T> = pxar::encoder::aio::Encoder<'a, T>;
@@ -158,6 +160,7 @@ pub async fn create_archive<T, F>(
     feature_flags: Flags,
     callback: F,
     options: PxarCreateOptions,
+    forced_boundaries: Option<mpsc::Sender<InjectChunks>>,
 ) -> Result<(), Error>
 where
     T: SeqWrite + Send,
@@ -213,6 +216,7 @@ where
         hardlinks: HashMap::new(),
         file_copy_buffer: vec::undefined(4 * 1024 * 1024),
         skip_e2big_xattr: options.skip_e2big_xattr,
+        forced_boundaries,
     };
 
     archiver
