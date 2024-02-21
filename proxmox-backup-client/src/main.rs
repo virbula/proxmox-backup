@@ -21,6 +21,7 @@ use proxmox_router::{cli::*, ApiMethod, RpcEnvironment};
 use proxmox_schema::api;
 use proxmox_sys::fs::{file_get_json, image_size, replace_file, CreateOptions};
 use proxmox_time::{epoch_i64, strftime_local};
+use pxar::accessor::aio::Accessor;
 use pxar::accessor::{MaybeReady, ReadAt, ReadAtOperation};
 
 use pbs_api_types::{
@@ -30,7 +31,7 @@ use pbs_api_types::{
     BACKUP_TYPE_SCHEMA, TRAFFIC_CONTROL_BURST_SCHEMA, TRAFFIC_CONTROL_RATE_SCHEMA,
 };
 use pbs_client::catalog_shell::Shell;
-use pbs_client::pxar::ErrorHandler as PxarErrorHandler;
+use pbs_client::pxar::{ErrorHandler as PxarErrorHandler, MetadataArchiveReader, PxarPrevRef};
 use pbs_client::tools::{
     complete_archive_name, complete_auth_id, complete_backup_group, complete_backup_snapshot,
     complete_backup_source, complete_chunk_size, complete_group_or_snapshot,
@@ -43,14 +44,14 @@ use pbs_client::tools::{
     CHUNK_SIZE_SCHEMA, REPO_URL_SCHEMA,
 };
 use pbs_client::{
-    delete_ticket_info, parse_backup_specification, view_task_result, BackupReader,
-    BackupRepository, BackupSpecificationType, BackupStats, BackupWriter, ChunkStream,
-    FixedChunkStream, HttpClient, InjectionData, PxarBackupStream, RemoteChunkReader,
+    delete_ticket_info, parse_backup_specification, view_task_result, BackupDetectionMode,
+    BackupReader, BackupRepository, BackupSpecificationType, BackupStats, BackupWriter,
+    ChunkStream, FixedChunkStream, HttpClient, InjectionData, PxarBackupStream, RemoteChunkReader,
     UploadOptions, BACKUP_SOURCE_SCHEMA,
 };
 use pbs_datastore::catalog::{BackupCatalogWriter, CatalogReader, CatalogWriter};
 use pbs_datastore::chunk_store::verify_chunk_size;
-use pbs_datastore::dynamic_index::{BufferedDynamicReader, DynamicIndexReader};
+use pbs_datastore::dynamic_index::{BufferedDynamicReader, DynamicIndexReader, LocalDynamicReadAt};
 use pbs_datastore::fixed_index::FixedIndexReader;
 use pbs_datastore::index::IndexFile;
 use pbs_datastore::manifest::{
@@ -687,6 +688,10 @@ fn spawn_catalog_upload(
                schema: TRAFFIC_CONTROL_BURST_SCHEMA,
                optional: true,
            },
+           "change-detection-mode": {
+               type: BackupDetectionMode,
+               optional: true,
+           },
            "exclude": {
                type: Array,
                description: "List of paths or patterns for matching files to exclude.",
@@ -722,6 +727,7 @@ async fn create_backup(
     param: Value,
     all_file_systems: bool,
     skip_lost_and_found: bool,
+    change_detection_mode: Option<BackupDetectionMode>,
     dry_run: bool,
     skip_e2big_xattr: bool,
     _info: &ApiMethod,
@@ -881,6 +887,8 @@ async fn create_backup(
 
     let backup_time = backup_time_opt.unwrap_or_else(epoch_i64);
 
+    let detection_mode = change_detection_mode.unwrap_or_default();
+
     let http_client = connect_rate_limited(&repo, rate_limit)?;
     record_repository(&repo);
 
@@ -981,7 +989,7 @@ async fn create_backup(
         None
     };
 
-    let mut manifest = BackupManifest::new(snapshot);
+    let mut manifest = BackupManifest::new(snapshot.clone());
 
     let mut catalog = None;
     let mut catalog_result_rx = None;
@@ -1028,22 +1036,21 @@ async fn create_backup(
                 manifest.add_file(target, stats.size, stats.csum, crypto.mode)?;
             }
             (BackupSpecificationType::PXAR, false) => {
-                let metadata_mode = false; // Until enabled via param
-
                 let target_base = if let Some(base) = target_base.strip_suffix(".pxar") {
                     base.to_string()
                 } else {
                     bail!("unexpected suffix in target: {target_base}");
                 };
 
-                let (target, payload_target) = if metadata_mode {
-                    (
-                        format!("{target_base}.mpxar.{extension}"),
-                        Some(format!("{target_base}.ppxar.{extension}")),
-                    )
-                } else {
-                    (target, None)
-                };
+                let (target, payload_target) =
+                    if detection_mode.is_metadata() || detection_mode.is_data() {
+                        (
+                            format!("{target_base}.mpxar.{extension}"),
+                            Some(format!("{target_base}.ppxar.{extension}")),
+                        )
+                    } else {
+                        (target, None)
+                    };
 
                 // start catalog upload on first use
                 if catalog.is_none() {
@@ -1060,12 +1067,42 @@ async fn create_backup(
                     .unwrap()
                     .start_directory(std::ffi::CString::new(target.as_str())?.as_c_str())?;
 
+                let mut previous_ref = None;
+                if detection_mode.is_metadata() {
+                    if let Some(ref manifest) = previous_manifest {
+                        // BackupWriter::start created a new snapshot, get the one before
+                        if let Some(backup_time) = client.previous_backup_time().await? {
+                            let backup_dir: BackupDir =
+                                (snapshot.group.clone(), backup_time).into();
+                            let backup_reader = BackupReader::start(
+                                &http_client,
+                                crypt_config.clone(),
+                                repo.store(),
+                                &backup_ns,
+                                &backup_dir,
+                                true,
+                            )
+                            .await?;
+                            previous_ref = prepare_reference(
+                                &target,
+                                manifest.clone(),
+                                &client,
+                                backup_reader.clone(),
+                                crypt_config.clone(),
+                                crypto.mode,
+                            )
+                            .await?
+                        }
+                    }
+                }
+
                 let pxar_options = pbs_client::pxar::PxarCreateOptions {
                     device_set: devices.clone(),
                     patterns: pattern_list.clone(),
                     entries_max: entries_max as usize,
                     skip_lost_and_found,
                     skip_e2big_xattr,
+                    previous_ref,
                 };
 
                 let upload_options = UploadOptions {
@@ -1175,6 +1212,72 @@ async fn create_backup(
     log::info!("Duration: {:.2}s", elapsed.as_secs_f64());
     log::info!("End Time: {}", strftime_local("%c", epoch_i64())?);
     Ok(Value::Null)
+}
+
+async fn prepare_reference(
+    target: &str,
+    manifest: Arc<BackupManifest>,
+    backup_writer: &BackupWriter,
+    backup_reader: Arc<BackupReader>,
+    crypt_config: Option<Arc<CryptConfig>>,
+    crypt_mode: CryptMode,
+) -> Result<Option<PxarPrevRef>, Error> {
+    let (target, payload_target) =
+        match pbs_client::tools::get_pxar_archive_names(target, &manifest) {
+            Ok((target, payload_target)) => (target, payload_target),
+            Err(_) => return Ok(None),
+        };
+    let payload_target = payload_target.unwrap_or_default();
+
+    let metadata_ref_index = if let Ok(index) = backup_reader
+        .download_dynamic_index(&manifest, &target)
+        .await
+    {
+        index
+    } else {
+        log::info!("No previous metadata index, continue without reference");
+        return Ok(None);
+    };
+
+    let file_info = match manifest.lookup_file_info(&payload_target) {
+        Ok(file_info) => file_info,
+        Err(_) => {
+            log::info!("No previous payload index found in manifest, continue without reference");
+            return Ok(None);
+        }
+    };
+
+    if file_info.crypt_mode != crypt_mode {
+        log::info!("Crypt mode mismatch, continue without reference");
+        return Ok(None);
+    }
+
+    let known_payload_chunks = Arc::new(Mutex::new(HashSet::new()));
+    let payload_ref_index = backup_writer
+        .download_previous_dynamic_index(&payload_target, &manifest, known_payload_chunks)
+        .await?;
+
+    log::info!("Using previous index as metadata reference for '{target}'");
+
+    let most_used = metadata_ref_index.find_most_used_chunks(8);
+    let file_info = manifest.lookup_file_info(&target)?;
+    let chunk_reader = RemoteChunkReader::new(
+        backup_reader.clone(),
+        crypt_config.clone(),
+        file_info.chunk_crypt_mode(),
+        most_used,
+    );
+    let reader = BufferedDynamicReader::new(metadata_ref_index, chunk_reader);
+    let archive_size = reader.archive_size();
+    let reader: MetadataArchiveReader = Arc::new(LocalDynamicReadAt::new(reader));
+    // only care about the metadata, therefore do not attach payload reader
+    let accessor = Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
+
+    Ok(Some(pbs_client::pxar::PxarPrevRef {
+        accessor,
+        payload_index: payload_ref_index,
+        archive_name: target,
+    }))
 }
 
 async fn dump_image<W: Write>(

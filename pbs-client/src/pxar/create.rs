@@ -18,6 +18,8 @@ use nix::sys::stat::{FileStat, Mode};
 
 use pathpatterns::{MatchEntry, MatchFlag, MatchList, MatchType, PatternFlag};
 use proxmox_sys::error::SysError;
+use pxar::accessor::aio::{Accessor, Directory};
+use pxar::accessor::ReadAt;
 use pxar::encoder::{LinkOffset, SeqWrite};
 use pxar::{Metadata, PxarVariant};
 
@@ -35,7 +37,7 @@ use crate::pxar::tools::assert_single_path_component;
 use crate::pxar::Flags;
 
 /// Pxar options for creating a pxar archive/stream
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct PxarCreateOptions {
     /// Device/mountpoint st_dev numbers that should be included. None for no limitation.
     pub device_set: Option<HashSet<u64>>,
@@ -47,6 +49,20 @@ pub struct PxarCreateOptions {
     pub skip_lost_and_found: bool,
     /// Skip xattrs of files that return E2BIG error
     pub skip_e2big_xattr: bool,
+    /// Reference state for partial backups
+    pub previous_ref: Option<PxarPrevRef>,
+}
+
+pub type MetadataArchiveReader = Arc<dyn ReadAt + Send + Sync + 'static>;
+
+/// Statefull information of previous backups snapshots for partial backups
+pub struct PxarPrevRef {
+    /// Reference accessor for metadata comparison
+    pub accessor: Accessor<MetadataArchiveReader>,
+    /// Reference index for reusing payload chunks
+    pub payload_index: DynamicIndexReader,
+    /// Reference archive name for partial backups
+    pub archive_name: String,
 }
 
 fn detect_fs_type(fd: RawFd) -> Result<i64, Error> {
@@ -136,6 +152,7 @@ struct Archiver {
     file_copy_buffer: Vec<u8>,
     skip_e2big_xattr: bool,
     forced_boundaries: Option<mpsc::Sender<InjectChunks>>,
+    previous_payload_index: Option<DynamicIndexReader>,
 }
 
 type Encoder<'a, T> = pxar::encoder::aio::Encoder<'a, T>;
@@ -200,6 +217,15 @@ where
             MatchType::Exclude,
         )?);
     }
+    let (previous_payload_index, previous_metadata_accessor) =
+        if let Some(refs) = options.previous_ref {
+            (
+                Some(refs.payload_index),
+                refs.accessor.open_root().await.ok(),
+            )
+        } else {
+            (None, None)
+        };
 
     let mut archiver = Archiver {
         feature_flags,
@@ -217,10 +243,11 @@ where
         file_copy_buffer: vec::undefined(4 * 1024 * 1024),
         skip_e2big_xattr: options.skip_e2big_xattr,
         forced_boundaries,
+        previous_payload_index,
     };
 
     archiver
-        .archive_dir_contents(&mut encoder, source_dir, true)
+        .archive_dir_contents(&mut encoder, previous_metadata_accessor, source_dir, true)
         .await?;
     encoder.finish().await?;
     encoder.close().await?;
@@ -252,6 +279,7 @@ impl Archiver {
     fn archive_dir_contents<'a, T: SeqWrite + Send>(
         &'a mut self,
         encoder: &'a mut Encoder<'_, T>,
+        mut previous_metadata_accessor: Option<Directory<MetadataArchiveReader>>,
         mut dir: Dir,
         is_root: bool,
     ) -> BoxFuture<'a, Result<(), Error>> {
@@ -286,9 +314,15 @@ impl Archiver {
 
                 (self.callback)(&file_entry.path)?;
                 self.path = file_entry.path;
-                self.add_entry(encoder, dir_fd, &file_entry.name, &file_entry.stat)
-                    .await
-                    .map_err(|err| self.wrap_err(err))?;
+                self.add_entry(
+                    encoder,
+                    &mut previous_metadata_accessor,
+                    dir_fd,
+                    &file_entry.name,
+                    &file_entry.stat,
+                )
+                .await
+                .map_err(|err| self.wrap_err(err))?;
             }
             self.path = old_path;
             self.entry_counter = entry_counter;
@@ -536,6 +570,7 @@ impl Archiver {
     async fn add_entry<T: SeqWrite + Send>(
         &mut self,
         encoder: &mut Encoder<'_, T>,
+        previous_metadata: &mut Option<Directory<MetadataArchiveReader>>,
         parent: RawFd,
         c_file_name: &CStr,
         stat: &FileStat,
@@ -625,7 +660,14 @@ impl Archiver {
                     catalog.lock().unwrap().start_directory(c_file_name)?;
                 }
                 let result = self
-                    .add_directory(encoder, dir, c_file_name, &metadata, stat)
+                    .add_directory(
+                        encoder,
+                        previous_metadata,
+                        dir,
+                        c_file_name,
+                        &metadata,
+                        stat,
+                    )
                     .await;
                 if let Some(ref catalog) = self.catalog {
                     catalog.lock().unwrap().end_directory()?;
@@ -678,6 +720,7 @@ impl Archiver {
     async fn add_directory<T: SeqWrite + Send>(
         &mut self,
         encoder: &mut Encoder<'_, T>,
+        previous_metadata_accessor: &mut Option<Directory<MetadataArchiveReader>>,
         dir: Dir,
         dir_name: &CStr,
         metadata: &Metadata,
@@ -708,7 +751,17 @@ impl Archiver {
             log::info!("skipping mount point: {:?}", self.path);
             Ok(())
         } else {
-            self.archive_dir_contents(encoder, dir, false).await
+            let mut dir_accessor = None;
+            if let Some(accessor) = previous_metadata_accessor.as_mut() {
+                if let Some(file_entry) = accessor.lookup(dir_name).await? {
+                    if file_entry.entry().is_dir() {
+                        let dir = file_entry.enter_directory().await?;
+                        dir_accessor = Some(dir);
+                    }
+                }
+            }
+            self.archive_dir_contents(encoder, dir_accessor, dir, false)
+                .await
         };
 
         self.fs_magic = old_fs_magic;

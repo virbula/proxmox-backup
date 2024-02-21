@@ -360,6 +360,7 @@ fn extract(
                         patterns,
                         skip_lost_and_found: false,
                         skip_e2big_xattr: false,
+                        previous_ref: None,
                     };
 
                     let pxar_writer = pxar::PxarVariant::Unified(TokioWriter::new(writer));
