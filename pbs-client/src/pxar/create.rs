@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString, OsStr};
 use std::fmt;
 use std::io::{self, Read};
+use std::mem::size_of;
 use std::ops::Range;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
@@ -21,7 +22,7 @@ use proxmox_sys::error::SysError;
 use pxar::accessor::aio::{Accessor, Directory};
 use pxar::accessor::ReadAt;
 use pxar::encoder::{LinkOffset, SeqWrite};
-use pxar::{Metadata, PxarVariant};
+use pxar::{EntryKind, Metadata, PxarVariant};
 
 use proxmox_io::vec;
 use proxmox_lang::c_str;
@@ -331,6 +332,40 @@ impl Archiver {
             Ok(())
         }
         .boxed()
+    }
+
+    async fn is_reusable_entry(
+        &mut self,
+        previous_metadata_accessor: &Option<Directory<MetadataArchiveReader>>,
+        file_name: &Path,
+        metadata: &Metadata,
+    ) -> Result<Option<Range<u64>>, Error> {
+        if let Some(previous_metadata_accessor) = previous_metadata_accessor {
+            if let Some(file_entry) = previous_metadata_accessor.lookup(file_name).await? {
+                if metadata == file_entry.metadata() {
+                    if let EntryKind::File {
+                        payload_offset: Some(offset),
+                        size,
+                        ..
+                    } = file_entry.entry().kind()
+                    {
+                        let range =
+                            *offset..*offset + size + size_of::<pxar::format::Header>() as u64;
+                        log::debug!(
+                            "reusable: {file_name:?} at range {range:?} has unchanged metadata."
+                        );
+                        return Ok(Some(range));
+                    }
+                    log::debug!("reencode: {file_name:?} not a regular file.");
+                    return Ok(None);
+                }
+                log::debug!("reencode: {file_name:?} metadata did not match.");
+                return Ok(None);
+            }
+            log::debug!("reencode: {file_name:?} not found in previous archive.");
+        }
+
+        Ok(None)
     }
 
     /// openat() wrapper which allows but logs `EACCES` and turns `ENOENT` into `None`.
