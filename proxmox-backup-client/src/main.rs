@@ -72,6 +72,8 @@ mod catalog;
 pub use catalog::*;
 mod snapshot;
 pub use snapshot::*;
+mod helper;
+pub(crate) use helper::*;
 pub mod key;
 pub mod namespace;
 
