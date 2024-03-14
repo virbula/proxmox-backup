@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString, OsStr};
 use std::fmt;
 use std::io::{self, Read};
+use std::ops::Range;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,8 @@ use proxmox_lang::c_str;
 use proxmox_sys::fs::{self, acl, xattr};
 
 use pbs_datastore::catalog::BackupCatalogWriter;
+use pbs_datastore::dynamic_index::DynamicIndexReader;
+use pbs_datastore::index::IndexFile;
 
 use crate::pxar::metadata::errno_is_unsupported;
 use crate::pxar::tools::assert_single_path_component;
@@ -778,6 +781,73 @@ impl Archiver {
             )
             .await?)
     }
+}
+
+/// Dynamic entry reusable by payload references
+#[derive(Clone, Debug)]
+#[repr(C)]
+pub struct ReusableDynamicEntry {
+    size: u64,
+    padding: u64,
+    digest: [u8; 32],
+}
+
+impl ReusableDynamicEntry {
+    #[inline]
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    #[inline]
+    pub fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+}
+
+/// List of dynamic entries containing the data given by an offset range
+fn lookup_dynamic_entries(
+    index: &DynamicIndexReader,
+    range: &Range<u64>,
+) -> Result<(Vec<ReusableDynamicEntry>, u64, u64), Error> {
+    let end_idx = index.index_count() - 1;
+    let chunk_end = index.chunk_end(end_idx);
+    let start = index.binary_search(0, 0, end_idx, chunk_end, range.start)?;
+
+    let mut prev_end = if start == 0 {
+        0
+    } else {
+        index.chunk_end(start - 1)
+    };
+    let padding_start = range.start - prev_end;
+    let mut padding_end = 0;
+
+    let mut indices = Vec::new();
+    for dynamic_entry in &index.index()[start..] {
+        let end = dynamic_entry.end();
+
+        let reusable_dynamic_entry = ReusableDynamicEntry {
+            size: (end - prev_end),
+            padding: 0,
+            digest: dynamic_entry.digest(),
+        };
+        indices.push(reusable_dynamic_entry);
+
+        if range.end < end {
+            padding_end = end - range.end;
+            break;
+        }
+        prev_end = end;
+    }
+
+    if let Some(first) = indices.first_mut() {
+        first.padding += padding_start;
+    }
+
+    if let Some(last) = indices.last_mut() {
+        last.padding += padding_end;
+    }
+
+    Ok((indices, padding_start, padding_end))
 }
 
 fn get_metadata(
