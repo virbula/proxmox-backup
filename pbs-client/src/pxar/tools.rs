@@ -128,25 +128,42 @@ pub fn format_single_line_entry(entry: &Entry) -> String {
 
     let meta = entry.metadata();
 
-    let (size, link) = match entry.kind() {
-        EntryKind::File { size, .. } => (format!("{}", *size), String::new()),
-        EntryKind::Symlink(link) => ("0".to_string(), format!(" -> {:?}", link.as_os_str())),
-        EntryKind::Hardlink(link) => ("0".to_string(), format!(" -> {:?}", link.as_os_str())),
-        EntryKind::Device(dev) => (format!("{},{}", dev.major, dev.minor), String::new()),
-        _ => ("0".to_string(), String::new()),
+    let (size, link, payload_offset) = match entry.kind() {
+        EntryKind::File {
+            size,
+            payload_offset,
+            ..
+        } => (format!("{}", *size), String::new(), *payload_offset),
+        EntryKind::Symlink(link) => ("0".to_string(), format!(" -> {:?}", link.as_os_str()), None),
+        EntryKind::Hardlink(link) => ("0".to_string(), format!(" -> {:?}", link.as_os_str()), None),
+        EntryKind::Device(dev) => (format!("{},{}", dev.major, dev.minor), String::new(), None),
+        _ => ("0".to_string(), String::new(), None),
     };
 
     let owner_string = format!("{}/{}", meta.stat.uid, meta.stat.gid);
 
-    format!(
-        "{} {:<13} {} {:>8} {:?}{}",
-        mode_string,
-        owner_string,
-        format_mtime(&meta.stat.mtime),
-        size,
-        entry.path(),
-        link,
-    )
+    if let Some(offset) = payload_offset {
+        format!(
+            "{} {:<13} {} {:>8} {:?}{} {}",
+            mode_string,
+            owner_string,
+            format_mtime(&meta.stat.mtime),
+            size,
+            entry.path(),
+            link,
+            offset,
+        )
+    } else {
+        format!(
+            "{} {:<13} {} {:>8} {:?}{}",
+            mode_string,
+            owner_string,
+            format_mtime(&meta.stat.mtime),
+            size,
+            entry.path(),
+            link,
+        )
+    }
 }
 
 pub fn format_multi_line_entry(entry: &Entry) -> String {
@@ -154,17 +171,23 @@ pub fn format_multi_line_entry(entry: &Entry) -> String {
 
     let meta = entry.metadata();
 
-    let (size, link, type_name) = match entry.kind() {
-        EntryKind::File { size, .. } => (format!("{}", *size), String::new(), "file"),
+    let (size, link, type_name, payload_offset) = match entry.kind() {
+        EntryKind::File {
+            size,
+            payload_offset,
+            ..
+        } => (format!("{}", *size), String::new(), "file", *payload_offset),
         EntryKind::Symlink(link) => (
             "0".to_string(),
             format!(" -> {:?}", link.as_os_str()),
             "symlink",
+            None,
         ),
         EntryKind::Hardlink(link) => (
             "0".to_string(),
             format!(" -> {:?}", link.as_os_str()),
             "symlink",
+            None,
         ),
         EntryKind::Device(dev) => (
             format!("{},{}", dev.major, dev.minor),
@@ -176,11 +199,12 @@ pub fn format_multi_line_entry(entry: &Entry) -> String {
             } else {
                 "device"
             },
+            None,
         ),
-        EntryKind::Socket => ("0".to_string(), String::new(), "socket"),
-        EntryKind::Fifo => ("0".to_string(), String::new(), "fifo"),
-        EntryKind::Directory => ("0".to_string(), String::new(), "directory"),
-        EntryKind::GoodbyeTable => ("0".to_string(), String::new(), "bad entry"),
+        EntryKind::Socket => ("0".to_string(), String::new(), "socket", None),
+        EntryKind::Fifo => ("0".to_string(), String::new(), "fifo", None),
+        EntryKind::Directory => ("0".to_string(), String::new(), "directory", None),
+        EntryKind::GoodbyeTable => ("0".to_string(), String::new(), "bad entry", None),
     };
 
     let file_name = match std::str::from_utf8(entry.path().as_os_str().as_bytes()) {
@@ -188,19 +212,39 @@ pub fn format_multi_line_entry(entry: &Entry) -> String {
         Err(_) => std::borrow::Cow::Owned(format!("{:?}", entry.path())),
     };
 
-    format!(
-        "  File: {}{}\n  \
-           Size: {:<13} Type: {}\n\
-         Access: ({:o}/{})  Uid: {:<5} Gid: {:<5}\n\
-         Modify: {}\n",
-        file_name,
-        link,
-        size,
-        type_name,
-        meta.file_mode(),
-        mode_string,
-        meta.stat.uid,
-        meta.stat.gid,
-        format_mtime(&meta.stat.mtime),
-    )
+    if let Some(offset) = payload_offset {
+        format!(
+            "  File: {}{}\n  \
+               Size: {:<13} Type: {}\n\
+             Access: ({:o}/{})  Uid: {:<5} Gid: {:<5}\n\
+             Modify: {}\n
+             PayloadOffset: {}\n",
+            file_name,
+            link,
+            size,
+            type_name,
+            meta.file_mode(),
+            mode_string,
+            meta.stat.uid,
+            meta.stat.gid,
+            format_mtime(&meta.stat.mtime),
+            offset,
+        )
+    } else {
+        format!(
+            "  File: {}{}\n  \
+               Size: {:<13} Type: {}\n\
+             Access: ({:o}/{})  Uid: {:<5} Gid: {:<5}\n\
+             Modify: {}\n",
+            file_name,
+            link,
+            size,
+            type_name,
+            meta.file_mode(),
+            mode_string,
+            meta.stat.uid,
+            meta.stat.gid,
+            format_mtime(&meta.stat.mtime),
+        )
+    }
 }
