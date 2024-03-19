@@ -16,6 +16,7 @@ use proxmox_schema::*;
 use proxmox_sys::fs::file_get_json;
 
 use pbs_api_types::{Authid, BackupNamespace, RateLimitConfig, UserWithTokens, BACKUP_REPO_URL};
+use pbs_datastore::BackupManifest;
 
 use crate::{BackupRepository, HttpClient, HttpClientOptions};
 
@@ -525,4 +526,40 @@ pub fn place_xdg_file(
     base_directories()
         .and_then(|base| base.place_config_file(file_name).map_err(Error::from))
         .with_context(|| format!("failed to place {} in xdg home", description))
+}
+
+pub fn get_pxar_archive_names(
+    archive_name: &str,
+    manifest: &BackupManifest,
+) -> Result<(String, Option<String>), Error> {
+    let (filename, ext) = match archive_name.strip_suffix(".didx") {
+        Some(filename) => (filename, ".didx"),
+        None => (archive_name, ""),
+    };
+
+    // Check if archive with given extension is present
+    if manifest
+        .files()
+        .iter()
+        .any(|fileinfo| fileinfo.filename == format!("{filename}.didx"))
+    {
+        // check if already given as one of split archive name variants
+        if let Some(base) = filename
+            .strip_suffix(".mpxar")
+            .or_else(|| filename.strip_suffix(".ppxar"))
+        {
+            return Ok((
+                format!("{base}.mpxar{ext}"),
+                Some(format!("{base}.ppxar{ext}")),
+            ));
+        }
+        return Ok((archive_name.to_owned(), None));
+    }
+
+    // if not, try fallback from regular to split archive
+    if let Some(base) = filename.strip_suffix(".pxar") {
+        return get_pxar_archive_names(&format!("{base}.mpxar{ext}"), manifest);
+    }
+
+    bail!("archive not found in manifest");
 }
