@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::mpsc;
 use std::task::{Context, Poll};
 
 use anyhow::Error;
@@ -7,6 +8,28 @@ use futures::ready;
 use futures::stream::{Stream, TryStream};
 
 use pbs_datastore::Chunker;
+
+use crate::inject_reused_chunks::InjectChunks;
+
+/// Holds the queues for optional injection of reused dynamic index entries
+pub struct InjectionData {
+    boundaries: mpsc::Receiver<InjectChunks>,
+    injections: mpsc::Sender<InjectChunks>,
+    consumed: u64,
+}
+
+impl InjectionData {
+    pub fn new(
+        boundaries: mpsc::Receiver<InjectChunks>,
+        injections: mpsc::Sender<InjectChunks>,
+    ) -> Self {
+        Self {
+            boundaries,
+            injections,
+            consumed: 0,
+        }
+    }
+}
 
 /// Split input stream into dynamic sized chunks
 pub struct ChunkStream<S: Unpin> {
