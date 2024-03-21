@@ -57,8 +57,10 @@ pub struct UploadOptions {
 struct UploadStats {
     chunk_count: usize,
     chunk_reused: usize,
+    chunk_injected: usize,
     size: usize,
     size_reused: usize,
+    size_injected: usize,
     size_compressed: usize,
     duration: std::time::Duration,
     csum: [u8; 32],
@@ -355,6 +357,14 @@ impl BackupWriter {
             pbs_tools::format::strip_server_file_extension(archive_name)
         };
 
+        if upload_stats.chunk_injected > 0 {
+            log::info!(
+                "{archive}: reused {} from previous snapshot for unchanged files ({} chunks)",
+                HumanByte::from(upload_stats.size_injected),
+                upload_stats.chunk_injected,
+            );
+        }
+
         if archive_name != CATALOG_NAME {
             let speed: HumanByte =
                 ((size_dirty * 1_000_000) / (upload_stats.duration.as_micros() as usize)).into();
@@ -645,6 +655,8 @@ impl BackupWriter {
         let total_chunks2 = total_chunks.clone();
         let known_chunk_count = Arc::new(AtomicUsize::new(0));
         let known_chunk_count2 = known_chunk_count.clone();
+        let injected_chunk_count = Arc::new(AtomicUsize::new(0));
+        let injected_chunk_count2 = injected_chunk_count.clone();
 
         let stream_len = Arc::new(AtomicUsize::new(0));
         let stream_len2 = stream_len.clone();
@@ -652,6 +664,8 @@ impl BackupWriter {
         let compressed_stream_len2 = compressed_stream_len.clone();
         let reused_len = Arc::new(AtomicUsize::new(0));
         let reused_len2 = reused_len.clone();
+        let injected_len = Arc::new(AtomicUsize::new(0));
+        let injected_len2 = injected_len.clone();
 
         let append_chunk_path = format!("{}_index", prefix);
         let upload_chunk_path = format!("{}_chunk", prefix);
@@ -672,6 +686,7 @@ impl BackupWriter {
                     // account for injected chunks
                     let count = chunks.len();
                     total_chunks.fetch_add(count, Ordering::SeqCst);
+                    injected_chunk_count.fetch_add(count, Ordering::SeqCst);
 
                     let mut known = Vec::new();
                     let mut guard = index_csum.lock().unwrap();
@@ -680,6 +695,7 @@ impl BackupWriter {
                         let offset =
                             stream_len.fetch_add(chunk.size() as usize, Ordering::SeqCst) as u64;
                         reused_len.fetch_add(chunk.size() as usize, Ordering::SeqCst);
+                        injected_len.fetch_add(chunk.size() as usize, Ordering::SeqCst);
                         let digest = chunk.digest();
                         known.push((offset, digest));
                         let end_offset = offset + chunk.size();
@@ -795,8 +811,10 @@ impl BackupWriter {
                 let duration = start_time.elapsed();
                 let chunk_count = total_chunks2.load(Ordering::SeqCst);
                 let chunk_reused = known_chunk_count2.load(Ordering::SeqCst);
+                let chunk_injected = injected_chunk_count2.load(Ordering::SeqCst);
                 let size = stream_len2.load(Ordering::SeqCst);
                 let size_reused = reused_len2.load(Ordering::SeqCst);
+                let size_injected = injected_len2.load(Ordering::SeqCst);
                 let size_compressed = compressed_stream_len2.load(Ordering::SeqCst) as usize;
 
                 let mut guard = index_csum_2.lock().unwrap();
@@ -805,8 +823,10 @@ impl BackupWriter {
                 futures::future::ok(UploadStats {
                     chunk_count,
                     chunk_reused,
+                    chunk_injected,
                     size,
                     size_reused,
+                    size_injected,
                     size_compressed,
                     duration,
                     csum,
