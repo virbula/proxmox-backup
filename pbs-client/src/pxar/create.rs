@@ -281,6 +281,34 @@ where
     encoder.finish().await?;
     encoder.close().await?;
 
+    if metadata_mode {
+        log::info!("Change detection summary:");
+        log::info!(
+            " - {} total files ({} hardlinks)",
+            archiver.reuse_stats.files_reused_count
+                + archiver.reuse_stats.files_reencoded_count
+                + archiver.reuse_stats.files_hardlink_count,
+            archiver.reuse_stats.files_hardlink_count,
+        );
+        log::info!(
+            " - {} unchanged, reusable files with {} data",
+            archiver.reuse_stats.files_reused_count,
+            HumanByte::from(archiver.reuse_stats.total_reused_payload_size),
+        );
+        log::info!(
+            " - {} changed or non-reusable files with {} data",
+            archiver.reuse_stats.files_reencoded_count,
+            HumanByte::from(archiver.reuse_stats.total_reencoded_size),
+        );
+        log::info!(
+            " - {} padding in {} partially reused chunks",
+            HumanByte::from(
+                archiver.reuse_stats.total_injected_size
+                    - archiver.reuse_stats.total_reused_payload_size
+            ),
+            archiver.reuse_stats.partial_chunks_count,
+        );
+    }
     Ok(())
 }
 
