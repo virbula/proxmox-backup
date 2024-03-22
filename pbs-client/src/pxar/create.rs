@@ -225,9 +225,6 @@ where
         set.insert(stat.st_dev);
     }
 
-    let metadata_mode = options.previous_ref.is_some() && writers.archive.payload().is_some();
-    let mut encoder = Encoder::new(writers.archive, &metadata, None).await?;
-
     let mut patterns = options.patterns;
 
     if options.skip_lost_and_found {
@@ -237,6 +234,15 @@ where
             MatchType::Exclude,
         )?);
     }
+
+    let cli_params_content = generate_pxar_excludes_cli(&patterns[..]);
+    let cli_params = if options.previous_ref.is_some() {
+        Some(cli_params_content.as_slice())
+    } else {
+        None
+    };
+
+    let metadata_mode = options.previous_ref.is_some() && writers.archive.payload().is_some();
     let (previous_payload_index, previous_metadata_accessor) =
         if let Some(refs) = options.previous_ref {
             (
@@ -246,6 +252,8 @@ where
         } else {
             (None, None)
         };
+
+    let mut encoder = Encoder::new(writers.archive, &metadata, cli_params).await?;
 
     let mut archiver = Archiver {
         feature_flags,
@@ -348,7 +356,7 @@ impl Archiver {
 
             let mut file_list = self.generate_directory_file_list(&mut dir, is_root)?;
 
-            if is_root && old_patterns_count > 0 {
+            if is_root && old_patterns_count > 0 && previous_metadata_accessor.is_none() {
                 file_list.push(FileListEntry {
                     name: CString::new(".pxarexclude-cli").unwrap(),
                     path: PathBuf::new(),
