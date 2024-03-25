@@ -16,6 +16,7 @@ use pbs_client::pxar::{
     format_single_line_entry, Flags, OverwriteFlags, PxarExtractOptions, PxarWriters,
     ENCODER_MAX_ENTRIES,
 };
+use pxar::EntryKind;
 
 use proxmox_router::cli::*;
 use proxmox_schema::api;
@@ -483,10 +484,28 @@ fn dump_archive(archive: String, payload_input: Option<String>) -> Result<(), Er
         pxar::PxarVariant::Unified(archive)
     };
 
+    let mut last = None;
     for entry in pxar::decoder::Decoder::open(input)? {
         let entry = entry?;
 
         if log::log_enabled!(log::Level::Debug) {
+            match entry.kind() {
+                EntryKind::File {
+                    payload_offset: Some(offset),
+                    size,
+                    ..
+                } => {
+                    if let Some(last) = last {
+                        let skipped = offset - last;
+                        if skipped > 0 {
+                            log::debug!("Encountered padding of {skipped} bytes");
+                        }
+                    }
+                    last = Some(offset + size + std::mem::size_of::<pxar::format::Header>() as u64);
+                }
+                _ => (),
+            }
+
             log::debug!("{}", format_single_line_entry(&entry));
         } else {
             log::info!("{:?}", entry.path());
