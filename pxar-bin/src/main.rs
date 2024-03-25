@@ -231,7 +231,8 @@ fn extract_archive(
     if archive == "-" {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
-        extract_archive_from_reader(&mut reader, target, feature_flags, options, None)?;
+        extract_archive_from_reader(&mut reader, target, feature_flags, options, None)
+            .map_err(|err| format_err!("error extracting archive - {err:#}"))?;
     } else {
         log::debug!("PXAR extract: {}", archive);
         let file = std::fs::File::open(archive)?;
@@ -248,7 +249,8 @@ fn extract_archive(
             feature_flags,
             options,
             payload_reader.as_mut(),
-        )?;
+        )
+        .map_err(|err| format_err!("error extracting archive - {err:#}"))?
     }
 
     if !was_ok.load(Ordering::Acquire) {
