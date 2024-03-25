@@ -25,9 +25,15 @@ fn extract_archive_from_reader<R: std::io::Read>(
     target: &str,
     feature_flags: Flags,
     options: PxarExtractOptions,
+    payload_reader: Option<&mut R>,
 ) -> Result<(), Error> {
+    let reader = if let Some(payload_reader) = payload_reader {
+        pxar::PxarVariant::Split(reader, payload_reader)
+    } else {
+        pxar::PxarVariant::Unified(reader)
+    };
     pbs_client::pxar::extract_archive(
-        pxar::decoder::Decoder::from_std(pxar::PxarVariant::Unified(reader))?,
+        pxar::decoder::Decoder::from_std(reader)?,
         Path::new(target),
         feature_flags,
         |path| {
@@ -120,6 +126,10 @@ fn extract_archive_from_reader<R: std::io::Read>(
                 optional: true,
                 default: false,
             },
+            "payload-input": {
+                description: "'ppxar' payload input data file to restore split archive.",
+                optional: true,
+            },
         },
     },
 )]
@@ -142,6 +152,7 @@ fn extract_archive(
     no_fifos: bool,
     no_sockets: bool,
     strict: bool,
+    payload_input: Option<String>,
 ) -> Result<(), Error> {
     let mut feature_flags = Flags::DEFAULT;
     if no_xattrs {
@@ -220,12 +231,24 @@ fn extract_archive(
     if archive == "-" {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
-        extract_archive_from_reader(&mut reader, target, feature_flags, options)?;
+        extract_archive_from_reader(&mut reader, target, feature_flags, options, None)?;
     } else {
         log::debug!("PXAR extract: {}", archive);
         let file = std::fs::File::open(archive)?;
         let mut reader = std::io::BufReader::new(file);
-        extract_archive_from_reader(&mut reader, target, feature_flags, options)?;
+        let mut payload_reader = if let Some(payload_input) = payload_input {
+            let file = std::fs::File::open(payload_input)?;
+            Some(std::io::BufReader::new(file))
+        } else {
+            None
+        };
+        extract_archive_from_reader(
+            &mut reader,
+            target,
+            feature_flags,
+            options,
+            payload_reader.as_mut(),
+        )?;
     }
 
     if !was_ok.load(Ordering::Acquire) {
@@ -465,7 +488,8 @@ fn main() {
                 .arg_param(&["archive", "target"])
                 .completion_cb("archive", complete_file_name)
                 .completion_cb("target", complete_file_name)
-                .completion_cb("files-from", complete_file_name),
+                .completion_cb("files-from", complete_file_name)
+                .completion_cb("payload-input", complete_file_name),
         )
         .insert(
             "mount",
