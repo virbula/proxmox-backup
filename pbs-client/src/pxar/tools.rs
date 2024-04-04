@@ -172,6 +172,13 @@ pub fn format_multi_line_entry(entry: &Entry) -> String {
     let meta = entry.metadata();
 
     let (size, link, type_name, payload_offset) = match entry.kind() {
+        EntryKind::Version(version) => (format!("{version:?}"), String::new(), "version", None),
+        EntryKind::Prelude(prelude) => (
+            "0".to_string(),
+            format!("raw data: {:?} bytes", prelude.data.len()),
+            "prelude",
+            None,
+        ),
         EntryKind::File {
             size,
             payload_offset,

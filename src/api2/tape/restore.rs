@@ -23,6 +23,7 @@ use pbs_api_types::{
     PRIV_DATASTORE_MODIFY, PRIV_TAPE_READ, TAPE_RESTORE_NAMESPACE_SCHEMA,
     TAPE_RESTORE_SNAPSHOT_SCHEMA, UPID_SCHEMA,
 };
+use pbs_client::tools::handle_root_with_optional_format_version_prelude;
 use pbs_config::CachedUserInfo;
 use pbs_datastore::dynamic_index::DynamicIndexReader;
 use pbs_datastore::fixed_index::FixedIndexReader;
@@ -1713,17 +1714,11 @@ fn try_restore_snapshot_archive<R: pxar::decoder::SeqRead>(
     decoder: &mut pxar::decoder::sync::Decoder<R>,
     snapshot_path: &Path,
 ) -> Result<BackupManifest, Error> {
-    let _root = match decoder.next() {
-        None => bail!("missing root entry"),
-        Some(root) => {
-            let root = root?;
-            match root.kind() {
-                pxar::EntryKind::Directory => { /* Ok */ }
-                _ => bail!("wrong root entry type"),
-            }
-            root
-        }
-    };
+    let (root, _) = handle_root_with_optional_format_version_prelude(decoder)?;
+    match root.kind() {
+        pxar::EntryKind::Directory => { /* Ok */ }
+        _ => bail!("wrong root entry type"),
+    }
 
     let root_path = Path::new("/");
     let manifest_file_name = OsStr::new(MANIFEST_BLOB_NAME);

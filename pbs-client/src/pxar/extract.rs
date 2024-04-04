@@ -29,6 +29,7 @@ use proxmox_compression::zip::{ZipEncoder, ZipEntry};
 use crate::pxar::dir_stack::PxarDirStack;
 use crate::pxar::metadata;
 use crate::pxar::Flags;
+use crate::tools::handle_root_with_optional_format_version_prelude;
 
 pub struct PxarExtractOptions<'a> {
     pub match_list: &'a [MatchEntry],
@@ -124,9 +125,7 @@ where
         // we use this to keep track of our directory-traversal
         decoder.enable_goodbye_entries(true);
 
-        let root = decoder
-            .next()
-            .context("found empty pxar archive")?
+        let (root, _) = handle_root_with_optional_format_version_prelude(&mut decoder)
             .context("error reading pxar archive")?;
 
         if !root.is_dir() {
@@ -267,6 +266,8 @@ where
         };
 
         let extract_res = match (did_match, entry.kind()) {
+            (_, EntryKind::Version(_version)) => Ok(()),
+            (_, EntryKind::Prelude(_prelude)) => Ok(()),
             (_, EntryKind::Directory) => {
                 self.callback(entry.path());
 

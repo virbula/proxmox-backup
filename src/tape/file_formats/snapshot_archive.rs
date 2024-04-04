@@ -61,6 +61,7 @@ pub fn tape_write_snapshot_archive<'a>(
         let mut encoder = pxar::encoder::sync::Encoder::new(
             pxar::PxarVariant::Unified(PxarTapeWriter::new(writer)),
             &root_metadata,
+            None,
         )?;
 
         for filename in file_list.iter() {

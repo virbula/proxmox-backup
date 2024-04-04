@@ -226,7 +226,7 @@ where
     }
 
     let metadata_mode = options.previous_ref.is_some() && writers.archive.payload().is_some();
-    let mut encoder = Encoder::new(writers.archive, &metadata).await?;
+    let mut encoder = Encoder::new(writers.archive, &metadata, None).await?;
 
     let mut patterns = options.patterns;
 
