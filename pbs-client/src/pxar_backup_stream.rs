@@ -42,21 +42,37 @@ impl PxarBackupStream {
         dir: Dir,
         catalog: Arc<Mutex<CatalogWriter<W>>>,
         options: crate::pxar::PxarCreateOptions,
-    ) -> Result<Self, Error> {
-        let (tx, rx) = std::sync::mpsc::sync_channel(10);
-
+        separate_payload_stream: bool,
+    ) -> Result<(Self, Option<Self>), Error> {
         let buffer_size = 256 * 1024;
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(10);
+        let writer = TokioWriterAdapter::new(std::io::BufWriter::with_capacity(
+            buffer_size,
+            StdChannelWriter::new(tx),
+        ));
+        let writer = pxar::encoder::sync::StandardWriter::new(writer);
+
+        let (writer, payload_rx) = if separate_payload_stream {
+            let (tx, rx) = std::sync::mpsc::sync_channel(10);
+            let payload_writer = TokioWriterAdapter::new(std::io::BufWriter::with_capacity(
+                buffer_size,
+                StdChannelWriter::new(tx),
+            ));
+            (
+                pxar::PxarVariant::Split(
+                    writer,
+                    pxar::encoder::sync::StandardWriter::new(payload_writer),
+                ),
+                Some(rx),
+            )
+        } else {
+            (pxar::PxarVariant::Unified(writer), None)
+        };
 
         let error = Arc::new(Mutex::new(None));
         let error2 = Arc::clone(&error);
         let handler = async move {
-            let writer = TokioWriterAdapter::new(std::io::BufWriter::with_capacity(
-                buffer_size,
-                StdChannelWriter::new(tx),
-            ));
-
-            let writer =
-                pxar::PxarVariant::Unified(pxar::encoder::sync::StandardWriter::new(writer));
             if let Err(err) = crate::pxar::create_archive(
                 dir,
                 PxarWriters::new(writer, Some(catalog)),
@@ -78,21 +94,30 @@ impl PxarBackupStream {
         let future = Abortable::new(handler, registration);
         tokio::spawn(future);
 
-        Ok(Self {
+        let backup_stream = Self {
+            rx: Some(rx),
+            handle: Some(handle.clone()),
+            error: Arc::clone(&error),
+        };
+
+        let backup_payload_stream = payload_rx.map(|rx| Self {
             rx: Some(rx),
             handle: Some(handle),
             error,
-        })
+        });
+
+        Ok((backup_stream, backup_payload_stream))
     }
 
     pub fn open<W: Write + Send + 'static>(
         dirname: &Path,
         catalog: Arc<Mutex<CatalogWriter<W>>>,
         options: crate::pxar::PxarCreateOptions,
-    ) -> Result<Self, Error> {
+        separate_payload_stream: bool,
+    ) -> Result<(Self, Option<Self>), Error> {
         let dir = nix::dir::Dir::open(dirname, OFlag::O_DIRECTORY, Mode::empty())?;
 
-        Self::new(dir, catalog, options)
+        Self::new(dir, catalog, options, separate_payload_stream)
     }
 }
 
