@@ -18,7 +18,7 @@ use nix::sys::stat::{FileStat, Mode};
 use pathpatterns::{MatchEntry, MatchFlag, MatchList, MatchType, PatternFlag};
 use proxmox_sys::error::SysError;
 use pxar::encoder::{LinkOffset, SeqWrite};
-use pxar::Metadata;
+use pxar::{Metadata, PxarVariant};
 
 use proxmox_io::vec;
 use proxmox_lang::c_str;
@@ -135,12 +135,25 @@ struct Archiver {
 
 type Encoder<'a, T> = pxar::encoder::aio::Encoder<'a, T>;
 
+pub struct PxarWriters<T> {
+    archive: PxarVariant<T, T>,
+    catalog: Option<Arc<Mutex<dyn BackupCatalogWriter + Send>>>,
+}
+
+impl<T> PxarWriters<T> {
+    pub fn new(
+        archive: PxarVariant<T, T>,
+        catalog: Option<Arc<Mutex<dyn BackupCatalogWriter + Send>>>,
+    ) -> Self {
+        Self { archive, catalog }
+    }
+}
+
 pub async fn create_archive<T, F>(
     source_dir: Dir,
-    mut writer: T,
+    writers: PxarWriters<T>,
     feature_flags: Flags,
     callback: F,
-    catalog: Option<Arc<Mutex<dyn BackupCatalogWriter + Send>>>,
     options: PxarCreateOptions,
 ) -> Result<(), Error>
 where
@@ -170,7 +183,7 @@ where
         set.insert(stat.st_dev);
     }
 
-    let mut encoder = Encoder::new(pxar::PxarVariant::Unified(&mut writer), &metadata).await?;
+    let mut encoder = Encoder::new(writers.archive, &metadata).await?;
 
     let mut patterns = options.patterns;
 
@@ -188,7 +201,7 @@ where
         fs_magic,
         callback: Box::new(callback),
         patterns,
-        catalog,
+        catalog: writers.catalog,
         path: PathBuf::new(),
         entry_counter: 0,
         entry_limit: options.entries_max,

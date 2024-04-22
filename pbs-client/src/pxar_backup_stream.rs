@@ -17,6 +17,8 @@ use proxmox_io::StdChannelWriter;
 
 use pbs_datastore::catalog::CatalogWriter;
 
+use crate::pxar::create::PxarWriters;
+
 /// Stream implementation to encode and upload .pxar archives.
 ///
 /// The hyper client needs an async Stream for file upload, so we
@@ -53,16 +55,16 @@ impl PxarBackupStream {
                 StdChannelWriter::new(tx),
             ));
 
-            let writer = pxar::encoder::sync::StandardWriter::new(writer);
+            let writer =
+                pxar::PxarVariant::Unified(pxar::encoder::sync::StandardWriter::new(writer));
             if let Err(err) = crate::pxar::create_archive(
                 dir,
-                writer,
+                PxarWriters::new(writer, Some(catalog)),
                 crate::pxar::Flags::DEFAULT,
                 move |path| {
                     log::debug!("{:?}", path);
                     Ok(())
                 },
-                Some(catalog),
                 options,
             )
             .await

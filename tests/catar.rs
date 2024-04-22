@@ -19,7 +19,7 @@ fn run_test(dir_name: &str) -> Result<(), Error> {
         .write(true)
         .truncate(true)
         .open("test-proxmox.catar")?;
-    let writer = pxar::encoder::sync::StandardWriter::new(writer);
+    let writer = pxar::PxarVariant::Unified(pxar::encoder::sync::StandardWriter::new(writer));
 
     let dir = nix::dir::Dir::open(
         dir_name,
@@ -35,10 +35,9 @@ fn run_test(dir_name: &str) -> Result<(), Error> {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(create_archive(
         dir,
-        writer,
+        PxarWriters::new(writer, None),
         Flags::DEFAULT,
         |_| Ok(()),
-        None,
         options,
     ))?;
 

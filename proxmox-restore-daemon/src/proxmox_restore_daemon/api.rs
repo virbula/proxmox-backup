@@ -23,7 +23,9 @@ use proxmox_sortable_macro::sortable;
 use proxmox_sys::fs::read_subdir;
 
 use pbs_api_types::file_restore::{FileRestoreFormat, RestoreDaemonStatus};
-use pbs_client::pxar::{create_archive, Flags, PxarCreateOptions, ENCODER_MAX_ENTRIES};
+use pbs_client::pxar::{
+    create_archive, Flags, PxarCreateOptions, PxarWriters, ENCODER_MAX_ENTRIES,
+};
 use pbs_datastore::catalog::{ArchiveEntry, DirEntryAttribute};
 use pbs_tools::json::required_string_param;
 
@@ -360,8 +362,8 @@ fn extract(
                         skip_e2big_xattr: false,
                     };
 
-                    let pxar_writer = TokioWriter::new(writer);
-                    create_archive(dir, pxar_writer, Flags::DEFAULT, |_| Ok(()), None, options)
+                    let pxar_writer = pxar::PxarVariant::Unified(TokioWriter::new(writer));
+                    create_archive(dir, PxarWriters::new(pxar_writer, None), Flags::DEFAULT, |_| Ok(()), options)
                         .await
                 }
                 .await;

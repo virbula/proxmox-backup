@@ -13,7 +13,8 @@ use tokio::signal::unix::{signal, SignalKind};
 
 use pathpatterns::{MatchEntry, MatchType, PatternFlag};
 use pbs_client::pxar::{
-    format_single_line_entry, Flags, OverwriteFlags, PxarExtractOptions, ENCODER_MAX_ENTRIES,
+    format_single_line_entry, Flags, OverwriteFlags, PxarExtractOptions, PxarWriters,
+    ENCODER_MAX_ENTRIES,
 };
 
 use proxmox_router::cli::*;
@@ -373,16 +374,15 @@ async fn create_archive(
         feature_flags.remove(Flags::WITH_SOCKETS);
     }
 
-    let writer = pxar::encoder::sync::StandardWriter::new(writer);
+    let writer = pxar::PxarVariant::Unified(pxar::encoder::sync::StandardWriter::new(writer));
     pbs_client::pxar::create_archive(
         dir,
-        writer,
+        PxarWriters::new(writer, None),
         feature_flags,
         move |path| {
             log::debug!("{:?}", path);
             Ok(())
         },
-        None,
         options,
     )
     .await?;

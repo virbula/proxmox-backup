@@ -56,7 +56,7 @@ pub(crate) mod tools;
 mod flags;
 pub use flags::Flags;
 
-pub use create::{create_archive, PxarCreateOptions};
+pub use create::{create_archive, PxarCreateOptions, PxarWriters};
 pub use extract::{
     create_tar, create_zip, extract_archive, extract_sub_dir, extract_sub_dir_seq, ErrorHandler,
     OverwriteFlags, PxarExtractContext, PxarExtractOptions,
