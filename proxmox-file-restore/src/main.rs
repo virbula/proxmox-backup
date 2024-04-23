@@ -470,9 +470,26 @@ async fn extract(
 
     match path {
         ExtractPath::Pxar(archive_name, path) => {
-            let (reader, archive_size) =
-                get_remote_pxar_reader(&archive_name, client, &manifest, crypt_config).await?;
-            let decoder = Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
+            let (archive_name, payload_archive_name) =
+                pbs_client::tools::get_pxar_archive_names(&archive_name, &manifest)?;
+            let (reader, archive_size) = get_remote_pxar_reader(
+                &archive_name,
+                client.clone(),
+                &manifest,
+                crypt_config.clone(),
+            )
+            .await?;
+
+            let reader = if let Some(payload_archive_name) = payload_archive_name {
+                let (payload_reader, payload_size) =
+                    get_remote_pxar_reader(&payload_archive_name, client, &manifest, crypt_config)
+                        .await?;
+                pxar::PxarVariant::Split(reader, (payload_reader, payload_size))
+            } else {
+                pxar::PxarVariant::Unified(reader)
+            };
+            let decoder = Accessor::new(reader, archive_size).await?;
+
             extract_to_target(decoder, &path, target, format, zstd).await?;
         }
         ExtractPath::VM(file, path) => {
