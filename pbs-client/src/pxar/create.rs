@@ -131,7 +131,7 @@ impl fmt::Display for ArchiveError {
 }
 
 #[derive(Eq, PartialEq, Hash)]
-struct HardLinkInfo {
+pub(crate) struct HardLinkInfo {
     st_dev: u64,
     st_ino: u64,
 }

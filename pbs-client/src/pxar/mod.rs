@@ -50,6 +50,7 @@
 pub(crate) mod create;
 pub(crate) mod dir_stack;
 pub(crate) mod extract;
+pub(crate) mod look_ahead_cache;
 pub(crate) mod metadata;
 pub(crate) mod tools;
 
