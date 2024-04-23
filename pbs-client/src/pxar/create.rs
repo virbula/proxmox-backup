@@ -140,6 +140,18 @@ pub(crate) struct HardLinkInfo {
     st_ino: u64,
 }
 
+#[derive(Default)]
+struct ReuseStats {
+    files_reused_count: u64,
+    files_hardlink_count: u64,
+    files_reencoded_count: u64,
+    total_injected_count: u64,
+    partial_chunks_count: u64,
+    total_injected_size: u64,
+    total_reused_payload_size: u64,
+    total_reencoded_size: u64,
+}
+
 struct Archiver {
     feature_flags: Flags,
     fs_feature_flags: Flags,
@@ -159,6 +171,7 @@ struct Archiver {
     forced_boundaries: Option<mpsc::Sender<InjectChunks>>,
     previous_payload_index: Option<DynamicIndexReader>,
     cache: PxarLookaheadCache,
+    reuse_stats: ReuseStats,
 }
 
 type Encoder<'a, T> = pxar::encoder::aio::Encoder<'a, T>;
@@ -252,6 +265,7 @@ where
         forced_boundaries,
         previous_payload_index,
         cache: PxarLookaheadCache::new(None),
+        reuse_stats: ReuseStats::default(),
     };
 
     archiver
@@ -813,15 +827,24 @@ impl Archiver {
                 }
 
                 let offset: LinkOffset = if let Some(payload_offset) = payload_offset {
+                    self.reuse_stats.total_reused_payload_size +=
+                        file_size + size_of::<pxar::format::Header>() as u64;
+                    self.reuse_stats.files_reused_count += 1;
+
                     encoder
                         .add_payload_ref(metadata, file_name, file_size, payload_offset)
                         .await?
                 } else {
+                    self.reuse_stats.total_reencoded_size +=
+                        file_size + size_of::<pxar::format::Header>() as u64;
+                    self.reuse_stats.files_reencoded_count += 1;
+
                     self.add_regular_file(encoder, fd, file_name, metadata, file_size)
                         .await?
                 };
 
                 if stat.st_nlink > 1 {
+                    self.reuse_stats.files_hardlink_count += 1;
                     self.hardlinks
                         .insert(link_info, (self.path.clone(), offset));
                 }
@@ -1044,6 +1067,13 @@ impl Archiver {
                     HumanByte::from(chunk.padding),
                     HumanByte::from(chunk.size()),
                 );
+                self.reuse_stats.total_injected_size += chunk.size();
+                self.reuse_stats.total_injected_count += 1;
+
+                if chunk.padding > 0 {
+                    self.reuse_stats.partial_chunks_count += 1;
+                }
+
                 size = size.add(chunk.size());
             }
 
