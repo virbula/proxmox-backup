@@ -35,7 +35,7 @@ use pbs_client::{BackupReader, BackupRepository, RemoteChunkReader};
 use pbs_datastore::catalog::{ArchiveEntry, CatalogReader, DirEntryAttribute};
 use pbs_datastore::dynamic_index::{BufferedDynamicReader, LocalDynamicReadAt};
 use pbs_datastore::index::IndexFile;
-use pbs_datastore::CATALOG_NAME;
+use pbs_datastore::{BackupManifest, CATALOG_NAME};
 use pbs_key_config::decrypt_key;
 use pbs_tools::crypt_config::CryptConfig;
 
@@ -328,6 +328,31 @@ async fn list(
     Ok(())
 }
 
+async fn get_remote_pxar_reader(
+    archive_name: &str,
+    client: Arc<BackupReader>,
+    manifest: &BackupManifest,
+    crypt_config: Option<Arc<CryptConfig>>,
+) -> Result<(LocalDynamicReadAt<RemoteChunkReader>, u64), Error> {
+    let index = client
+        .download_dynamic_index(&manifest, &archive_name)
+        .await?;
+    let most_used = index.find_most_used_chunks(8);
+
+    let file_info = manifest.lookup_file_info(&archive_name)?;
+    let chunk_reader = RemoteChunkReader::new(
+        client.clone(),
+        crypt_config,
+        file_info.chunk_crypt_mode(),
+        most_used,
+    );
+
+    let reader = BufferedDynamicReader::new(index, chunk_reader);
+    let archive_size = reader.archive_size();
+
+    Ok((LocalDynamicReadAt::new(reader), archive_size))
+}
+
 #[api(
     input: {
         properties: {
@@ -445,21 +470,8 @@ async fn extract(
 
     match path {
         ExtractPath::Pxar(archive_name, path) => {
-            let file_info = manifest.lookup_file_info(&archive_name)?;
-            let index = client
-                .download_dynamic_index(&manifest, &archive_name)
-                .await?;
-            let most_used = index.find_most_used_chunks(8);
-            let chunk_reader = RemoteChunkReader::new(
-                client.clone(),
-                crypt_config,
-                file_info.chunk_crypt_mode(),
-                most_used,
-            );
-            let reader = BufferedDynamicReader::new(index, chunk_reader);
-
-            let archive_size = reader.archive_size();
-            let reader = LocalDynamicReadAt::new(reader);
+            let (reader, archive_size) =
+                get_remote_pxar_reader(&archive_name, client, &manifest, crypt_config).await?;
             let decoder = Accessor::new(pxar::PxarVariant::Unified(reader), archive_size).await?;
             extract_to_target(decoder, &path, target, format, zstd).await?;
         }
