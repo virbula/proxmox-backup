@@ -490,7 +490,9 @@ async fn extract(
             };
             let decoder = Accessor::new(reader, archive_size).await?;
 
-            extract_to_target(decoder, &path, target, format, zstd).await?;
+            extract_to_target(decoder, &path, target, format, zstd)
+                .await
+                .map_err(|err| format_err!("error extracting archive - {err:#}"))?;
         }
         ExtractPath::VM(file, path) => {
             let details = SnapRestoreDetails {
