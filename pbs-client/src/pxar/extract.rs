@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr, OsString};
-use std::io;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -37,6 +38,7 @@ pub struct PxarExtractOptions<'a> {
     pub allow_existing_dirs: bool,
     pub overwrite_flags: OverwriteFlags,
     pub on_error: Option<ErrorHandler>,
+    pub prelude_path: Option<PathBuf>,
 }
 
 bitflags! {
@@ -125,8 +127,25 @@ where
         // we use this to keep track of our directory-traversal
         decoder.enable_goodbye_entries(true);
 
-        let (root, _) = handle_root_with_optional_format_version_prelude(&mut decoder)
+        let (root, prelude) = handle_root_with_optional_format_version_prelude(&mut decoder)
             .context("error reading pxar archive")?;
+
+        if let Some(ref path) = options.prelude_path {
+            if let Some(entry) = prelude {
+                let mut prelude_file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .open(path)
+                    .with_context(|| format!("error creating prelude file '{path:?}'"))?;
+                if let pxar::EntryKind::Prelude(ref prelude) = entry.kind() {
+                    prelude_file.write_all(prelude.as_os_str().as_bytes())?;
+                } else {
+                    log::info!("unexpected entry kind for prelude");
+                }
+            } else {
+                log::info!("No prelude entry found, skip prelude restore.");
+            }
+        }
 
         if !root.is_dir() {
             bail!("pxar archive does not start with a directory entry!");

@@ -1441,7 +1441,12 @@ We do not extract '.pxar' archives when writing to standard output.
                 description: "ignore errors that occur during device node extraction",
                 optional: true,
                 default: false,
-            }
+            },
+            "prelude-target": {
+                description: "Path to restore prelude to, (pxar v2 archives only).",
+                type: String,
+                optional: true,
+            },
         }
     }
 )]
@@ -1601,12 +1606,17 @@ async fn restore(
             overwrite_flags.insert(pbs_client::pxar::OverwriteFlags::all());
         }
 
+        let prelude_path = param["prelude-target"]
+            .as_str()
+            .map(|path| PathBuf::from(path));
+
         let options = pbs_client::pxar::PxarExtractOptions {
             match_list: &[],
             extract_match_default: true,
             allow_existing_dirs,
             overwrite_flags,
             on_error,
+            prelude_path,
         };
 
         let mut feature_flags = pbs_client::pxar::Flags::DEFAULT;
@@ -1935,7 +1945,8 @@ fn main() {
         .completion_cb("ns", complete_namespace)
         .completion_cb("snapshot", complete_group_or_snapshot)
         .completion_cb("archive-name", complete_archive_name)
-        .completion_cb("target", complete_file_name);
+        .completion_cb("target", complete_file_name)
+        .completion_cb("prelude-target", complete_file_name);
 
     let prune_cmd_def = CliCommand::new(&API_METHOD_PRUNE)
         .arg_param(&["group"])

@@ -130,6 +130,10 @@ fn extract_archive_from_reader<R: std::io::Read>(
                 description: "'ppxar' payload input data file to restore split archive.",
                 optional: true,
             },
+            "prelude-target": {
+                description: "Path to restore pxar archive prelude to.",
+                optional: true,
+            },
         },
     },
 )]
@@ -153,6 +157,7 @@ fn extract_archive(
     no_sockets: bool,
     strict: bool,
     payload_input: Option<String>,
+    prelude_target: Option<String>,
 ) -> Result<(), Error> {
     let mut feature_flags = Flags::DEFAULT;
     if no_xattrs {
@@ -226,6 +231,7 @@ fn extract_archive(
         overwrite_flags,
         extract_match_default,
         on_error,
+        prelude_path: prelude_target.map(|path| PathBuf::from(path)),
     };
 
     if archive == "-" {
@@ -507,7 +513,8 @@ fn main() {
                 .completion_cb("archive", complete_file_name)
                 .completion_cb("target", complete_file_name)
                 .completion_cb("files-from", complete_file_name)
-                .completion_cb("payload-input", complete_file_name),
+                .completion_cb("payload-input", complete_file_name)
+                .completion_cb("prelude-target", complete_file_name),
         )
         .insert(
             "mount",
