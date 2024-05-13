@@ -167,6 +167,12 @@ impl Chunker {
         0
     }
 
+    pub fn reset(&mut self) {
+        self.h = 0;
+        self.chunk_size = 0;
+        self.window_size = 0;
+    }
+
     // fast implementation avoiding modulo
     // #[inline(always)]
     fn shall_break(&self) -> bool {
