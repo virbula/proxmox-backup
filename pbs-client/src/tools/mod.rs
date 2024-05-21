@@ -563,3 +563,16 @@ pub fn get_pxar_archive_names(
 
     bail!("archive not found in manifest");
 }
+
+/// Check if the given filename has a valid pxar filename extension variant
+///
+/// If `with_didx_extension` is `true`, check the additional `.didx` ending.
+pub fn has_pxar_filename_extension(name: &str, with_didx_extension: bool) -> bool {
+    if with_didx_extension {
+        name.ends_with(".pxar.didx")
+            || name.ends_with(".mpxar.didx")
+            || name.ends_with(".ppxar.didx")
+    } else {
+        name.ends_with(".pxar") || name.ends_with(".mpxar") || name.ends_with(".ppxar")
+    }
+}
