@@ -690,24 +690,15 @@ impl Archiver {
             }
             mode::IFDIR => {
                 let dir = Dir::from_fd(fd.into_raw_fd())?;
-
-                if let Some(ref catalog) = self.catalog {
-                    catalog.lock().unwrap().start_directory(c_file_name)?;
-                }
-                let result = self
-                    .add_directory(
-                        encoder,
-                        previous_metadata,
-                        dir,
-                        c_file_name,
-                        &metadata,
-                        stat,
-                    )
-                    .await;
-                if let Some(ref catalog) = self.catalog {
-                    catalog.lock().unwrap().end_directory()?;
-                }
-                result
+                self.add_directory(
+                    encoder,
+                    previous_metadata,
+                    dir,
+                    c_file_name,
+                    &metadata,
+                    stat,
+                )
+                .await
             }
             mode::IFSOCK => {
                 if let Some(ref catalog) = self.catalog {
@@ -757,12 +748,15 @@ impl Archiver {
         encoder: &mut Encoder<'_, T>,
         previous_metadata_accessor: &mut Option<Directory<MetadataArchiveReader>>,
         dir: Dir,
-        dir_name: &CStr,
+        c_dir_name: &CStr,
         metadata: &Metadata,
         stat: &FileStat,
     ) -> Result<(), Error> {
-        let dir_name = OsStr::from_bytes(dir_name.to_bytes());
+        let dir_name = OsStr::from_bytes(c_dir_name.to_bytes());
 
+        if let Some(ref catalog) = self.catalog {
+            catalog.lock().unwrap().start_directory(c_dir_name)?;
+        }
         encoder.create_directory(dir_name, metadata).await?;
 
         let old_fs_magic = self.fs_magic;
@@ -804,6 +798,10 @@ impl Archiver {
         self.current_st_dev = old_st_dev;
 
         encoder.finish().await?;
+        if let Some(ref catalog) = self.catalog {
+            catalog.lock().unwrap().end_directory()?;
+        }
+
         result
     }
 
