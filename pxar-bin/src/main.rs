@@ -18,6 +18,7 @@ use pbs_client::pxar::{
 };
 use pxar::EntryKind;
 
+use proxmox_human_byte::HumanByte;
 use proxmox_router::cli::*;
 use proxmox_schema::api;
 
@@ -490,6 +491,14 @@ fn dump_archive(archive: String, payload_input: Option<String>) -> Result<(), Er
 
         if log::log_enabled!(log::Level::Debug) {
             match entry.kind() {
+                EntryKind::Version(version) => {
+                    log::debug!("pxar format version '{version:?}'");
+                    continue;
+                }
+                EntryKind::Prelude(prelude) => {
+                    log::debug!("prelude of size {}", HumanByte::from(prelude.data.len()));
+                    continue;
+                }
                 EntryKind::File {
                     payload_offset: Some(offset),
                     size,
@@ -508,7 +517,10 @@ fn dump_archive(archive: String, payload_input: Option<String>) -> Result<(), Er
 
             log::debug!("{}", format_single_line_entry(&entry));
         } else {
-            log::info!("{:?}", entry.path());
+            match entry.kind() {
+                EntryKind::Version(_) | EntryKind::Prelude(_) => continue,
+                _ => log::info!("{:?}", entry.path()),
+            }
         }
     }
     Ok(())
