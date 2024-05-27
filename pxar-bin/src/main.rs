@@ -454,12 +454,26 @@ async fn mount_archive(archive: String, mountpoint: String, verbose: bool) -> Re
             archive: {
                 description: "Archive name.",
             },
+            "payload-input": {
+                description: "'ppxar' payload input data file for split archive.",
+                optional: true,
+            },
         },
     },
 )]
 /// List the contents of an archive.
-fn dump_archive(archive: String) -> Result<(), Error> {
-    for entry in pxar::decoder::Decoder::open(pxar::PxarVariant::Unified(archive))? {
+fn dump_archive(archive: String, payload_input: Option<String>) -> Result<(), Error> {
+    if archive.ends_with(".mpxar") && payload_input.is_none() {
+        bail!("Payload input required for split pxar archives");
+    }
+
+    let input = if let Some(payload_input) = payload_input {
+        pxar::PxarVariant::Split(archive, payload_input)
+    } else {
+        pxar::PxarVariant::Unified(archive)
+    };
+
+    for entry in pxar::decoder::Decoder::open(input)? {
         let entry = entry?;
 
         if log::log_enabled!(log::Level::Debug) {
@@ -502,7 +516,8 @@ fn main() {
             "list",
             CliCommand::new(&API_METHOD_DUMP_ARCHIVE)
                 .arg_param(&["archive"])
-                .completion_cb("archive", complete_file_name),
+                .completion_cb("archive", complete_file_name)
+                .completion_cb("payload-input", complete_file_name),
         );
 
     let rpcenv = CliEnvironment::new();
