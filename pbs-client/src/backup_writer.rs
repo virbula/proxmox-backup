@@ -371,14 +371,9 @@ impl BackupWriter {
             let size_dirty: HumanByte = size_dirty.into();
             let size_compressed: HumanByte = upload_stats.size_compressed.into();
             log::info!(
-                "{}: had to backup {} of {} (compressed {}) in {:.2}s",
-                archive,
-                size_dirty,
-                size,
-                size_compressed,
+                "{archive}: had to backup {size_dirty} of {size} (compressed {size_compressed}) in {:.2} s (average {speed}/s)",
                 upload_stats.duration.as_secs_f64()
             );
-            log::info!("{}: average backup speed: {}/s", archive, speed);
         } else {
             log::info!("Uploaded backup catalog ({})", size);
         }
