@@ -34,3 +34,4 @@ target/
 # virbula custom
 .DS_Store
 tests/pxar/*.ppxar
+tests/pxar/*.ppxar
