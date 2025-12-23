@@ -30,3 +30,7 @@ __pycache__/
 build/
 local.mak
 target/
+
+# virbula custom
+.DS_Store
+tests/pxar/*.ppxar
