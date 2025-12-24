@@ -84,3 +84,19 @@ These files suppress specific warnings from the Debian package checker that are 
 * `lintian-overrides` (Global)
 * `proxmox-backup-client-static.lintian-overrides`
 * `proxmox-backup-docs.lintian-overrides`
+
+## Package Build & Separation
+
+### Build Process
+The build is orchestrated by the `rules` file, which is a standard Debian `Makefile`. The typical flow is:
+1.  **Dependencies**: `debhelper` and `cargo` ensure all build requirements are met.
+2.  **Compilation**: `cargo build --release` compiles all binaries from the source tree at once.
+3.  **Optimization**: Scripts like `elf-strip-unused-dependencies.sh` optimize the resulting binaries.
+
+### Server vs. Client Separation
+This code specifically supports creating **separate packages**.
+* **Single Source**: All code is built from the same Rust workspace.
+* **Split Packaging**: The `.install` files are the key mechanism here.
+    * `proxmox-backup-server.install` grabs only the server binaries (`proxmox-backup-proxy`, etc.).
+    * `proxmox-backup-client.install` grabs only the client binaries (`proxmox-backup-client`, `pxar`).
+* **Outcome**: A user can run `apt install proxmox-backup-client` to get just the backup tool without installing the heavy server daemons.
